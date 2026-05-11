@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Phase 4: Validation Helpers
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['subscriptionPlan', 'email'])
+          && data.keys().size() <= 4
+          && data.subscriptionPlan in ['free', 'monthly', 'annually']
+          && data.email is string && data.email.size() <= 200;
+    }
+
+    function isValidMeeting(data) {
+      return data.keys().hasAll(['title', 'createdAt', 'duration', 'transcript', 'userId'])
+          && data.keys().size() <= 7
+          && data.title is string && data.title.size() <= 500
+          && data.createdAt is number
+          && data.duration is number
+          && data.transcript is list
+          && data.transcript.size() <= 2000
+          && data.userId == request.auth.uid;
+    }
+
+    // Rules for Collections
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidUserProfile(incoming()) 
+        && incoming().diff(existing()).affectedKeys().hasOnly(['subscriptionPlan', 'displayName']);
+      
+      match /meetings/{meetingId} {
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidMeeting(incoming()) && isValidId(meetingId);
+        allow update: if isOwner(userId) && isValidMeeting(incoming())
+          && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'summary', 'duration', 'transcript']);
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}

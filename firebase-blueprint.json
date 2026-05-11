@@ -1,0 +1,50 @@
+{
+  "entities": {
+    "Meeting": {
+      "title": "Meeting",
+      "description": "Represents a recorded meeting with transcription.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Title of the meeting" },
+        "createdAt": { "type": "number", "description": "Creation timestamp" },
+        "duration": { "type": "number", "description": "Meeting duration in seconds" },
+        "transcript": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "text": { "type": "string" },
+              "timestamp": { "type": "number" },
+              "speaker": { "type": "string" }
+            }
+          }
+        },
+        "summary": { "type": "string", "description": "AI generated summary" },
+        "userId": { "type": "string", "description": "Owner ID" }
+      },
+      "required": ["title", "createdAt", "duration", "transcript", "userId"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Stores user settings and subscription plan.",
+      "type": "object",
+      "properties": {
+        "subscriptionPlan": { "type": "string", "enum": ["free", "monthly", "annually"] },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" }
+      },
+      "required": ["subscriptionPlan", "email"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Public user profiles"
+    },
+    "/users/{userId}/meetings/{meetingId}": {
+      "schema": "Meeting",
+      "description": "Private meeting transcripts"
+    }
+  }
+}

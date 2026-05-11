@@ -1,0 +1,9 @@
+{
+  "name": "Transcrição Pro02",
+  "description": "Transcrição de áudio em tempo real com legendas, organização de reuniões e exportação de transcrições.",
+  "requestFramePermissions": [
+    "microphone",
+    "display-capture"
+  ],
+  "majorCapabilities": []
+}
