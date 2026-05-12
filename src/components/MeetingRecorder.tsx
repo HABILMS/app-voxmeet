@@ -1,24 +1,15 @@
-import { useState, useRef } from 'react';
+// src/components/MeetingRecorder.tsx — VoxMeet
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Mic, 
-  Square, 
-  Save, 
-  RotateCcw, 
-  Languages, 
-  Sparkles, 
-  Loader2, 
-  Brain, 
-  MessageSquare, 
-  X, 
-  Send, 
-  Download,
-  Share2
+import {
+  Mic, Square, Save, Languages, Sparkles,
+  Loader2, Brain, MessageSquare, X, Send,
+  AlertCircle, CheckCircle2, Upload
 } from 'lucide-react';
 import { useTranscription } from '../hooks/useTranscription';
 import { cn } from '../lib/utils';
-import { TranscriptSegment } from '../types';
-import { GoogleGenAI } from "@google/genai";
+import { TranscriptSegment, MeetingSource, UserProfile } from '../types';
+import { summarizeMeeting, chatWithTranscript, transcribeAudio } from '../services/groqService';
 
 const LANGUAGES = [
   { code: 'pt-BR', name: 'Português' },
@@ -30,256 +21,231 @@ const LANGUAGES = [
 ];
 
 interface MeetingRecorderProps {
-  onSave: (segments: TranscriptSegment[], audioUrl?: string | null) => void;
+  onSave: (segments: TranscriptSegment[], source: MeetingSource, audioBlob?: Blob | null) => void;
+  userProfile?: UserProfile | null;
 }
 
-export function MeetingRecorder({ onSave }: MeetingRecorderProps) {
-  const [lang, setLang] = useState(() => localStorage.getItem('pro_lang') || 'pt-BR');
-  const { isRecording, segments, setSegments, interimText, audioUrl, audioBlob, startRecording, stopRecording, captureMode, setCaptureMode } = useTranscription(lang);
+export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
+  const [lang, setLang] = useState(() => localStorage.getItem('voxmeet_lang') || 'pt-BR');
+  const userApiKey = userProfile?.apiKey ?? null;
+
+  const {
+    isRecording, isTranscribing, segments, setSegments,
+    interimText, audioBlob, startRecording, stopRecording,
+    captureMode, setCaptureMode, error, setError,
+  } = useTranscription(lang, userApiKey);
+
   const [isProcessingAI, setIsProcessingAI] = useState(false);
-  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
-  const [assistantPrompt, setAssistantPrompt] = useState('');
-  const [assistantResponse, setAssistantResponse] = useState('');
-  const responseEndRef = useRef<HTMLDivElement>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatPrompt, setChatPrompt] = useState('');
+  const [chatResponse, setChatResponse] = useState('');
+  const [uploadLoading, setUploadLoading] = useState(false);
 
   const handleLangChange = (newLang: string) => {
     setLang(newLang);
-    localStorage.setItem('pro_lang', newLang);
+    localStorage.setItem('voxmeet_lang', newLang);
   };
 
-  const handleTranscribeWithAI = async () => {
-    if (!audioBlob) return;
-    setIsProcessingAI(true);
-    
+  // Upload de arquivo de áudio (WhatsApp, gravações externas)
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const allowed = ['audio/webm', 'audio/mp4', 'audio/mpeg', 'audio/ogg',
+                     'audio/wav', 'audio/flac', 'audio/m4a', 'audio/x-m4a'];
+    if (!allowed.includes(file.type) && !file.name.match(/\.(mp3|m4a|wav|ogg|flac|webm|mp4)$/i)) {
+      setError('Formato não suportado. Use MP3, M4A, WAV, OGG, FLAC ou WebM.');
+      return;
+    }
+
+    setUploadLoading(true);
+    setSegments([]);
+    setError(null);
+
     try {
-        const apiKey = (process as any).env.GEMINI_API_KEY?.trim();
-        if (!apiKey) {
-          throw new Error("A chave da API do Gemini não foi encontrada. Certifique-se de que o ambiente está configurado corretamente.");
-        }
-
-        const ai = new GoogleGenAI({ apiKey });
-        
-        // Convert Blob to base64
-        const reader = new FileReader();
-        const base64Promise = new Promise<string>((resolve, reject) => {
-          reader.onload = () => {
-            const result = reader.result as string;
-            const base64 = result.split(',')[1];
-            resolve(base64);
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(audioBlob);
-        });
-
-        const base64Data = await base64Promise;
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: [
-            {
-              inlineData: {
-                data: base64Data,
-                mimeType: audioBlob.type || 'audio/webm',
-              },
-            },
-            { text: `Transcreva este áudio com precisão. Importante: Forneça APENAS o texto da transcrição sem blocos markdown ou formatação extra. O idioma provável é ${lang || 'pt-BR'}. Adicione quebras de parágrafo naturais.` }
-          ]
-        });
-
-        if (response.text) {
-          // Create a new segment representing the full AI transcription
-          setSegments([{
-            id: Math.random().toString(36).substr(2, 9),
-            text: response.text,
-            timestamp: Date.now(),
-          }]);
-        }
+      const result = await transcribeAudio(file, lang.split('-')[0], userApiKey);
+      setSegments(result);
     } catch (err: any) {
-        console.error("Transcription error:", err);
-        let msg = err.message || 'Erro ao processar áudio com IA';
-        if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
-          msg = "A chave de API configurada é inválida.";
-        } else if (msg.includes('API_KEY_SERVICE_BLOCKED') || msg.includes('are blocked')) {
-          msg = "Acesso Bloqueado: A chave da API do Gemini inserida possui restrições ou a 'Generative Language API' não está ativada no seu Google Cloud Project. Habilite a API no Google Cloud Console ou crie uma chave sem restrições no AI Studio (aistudio.google.com/app/apikey).";
-        }
-        alert(`Erro: ${msg}`);
+      setError(err.message || 'Erro ao transcrever arquivo.');
     } finally {
-      setIsProcessingAI(false);
+      setUploadLoading(false);
+      e.target.value = '';
     }
   };
 
-  const handleSummarizeWithNvidia = async () => {
+  // Resumo + action items via Groq LLaMA
+  const handleSummarize = async () => {
     if (segments.length === 0) return;
     setIsProcessingAI(true);
     try {
-      const fullText = segments.map(s => s.text).join('\n\n');
-      
-      const res = await fetch('/api/summarize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: fullText, lang })
-      });
-      
-      const contentType = res.headers.get("content-type");
-      if (!contentType || !contentType.includes("application/json")) {
-         throw new Error("O servidor retornou um erro (HTML). Se estiver no Render, certifique-se de implantar como 'Web Service' (Node) e não 'Static Site'.");
-      }
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || `Falha na API da NVIDIA (Status ${res.status})`);
-      }
-      
-      const data = await res.json();
-      
-      if (data.summary) {
+      const result = await summarizeMeeting(segments, lang, userApiKey);
+      if (result?.summary) {
         setSegments(prev => [
-          ...prev, 
+          ...prev,
           {
-            id: Math.random().toString(36).substr(2, 9),
-            text: `=== RESUMO (NVIDIA AI) ===\n\n${data.summary}`,
+            id: `summary_${Date.now()}`,
+            text: `━━ RESUMO ━━\n\n${result.summary}${result.actionItems.length > 0
+              ? '\n\n━━ ACTION ITEMS ━━\n' + result.actionItems.map((a, i) => `${i + 1}. ${a}`).join('\n')
+              : ''}`,
             timestamp: Date.now(),
           }
         ]);
       }
-    } catch (err) {
-      console.error(err);
-      alert('Erro ao resumir transcrição. Verifique se a NVIDIA_API_KEY está configurada.');
-    } finally {
-      setIsProcessingAI(false);
-    }
-  };
-
-  const handleAssistantRequest = async () => {
-    if (!assistantPrompt.trim() || segments.length === 0) return;
-    setIsProcessingAI(true);
-    setAssistantResponse('');
-    
-    try {
-        const apiKey = (process as any).env.GEMINI_API_KEY?.trim();
-        if (!apiKey) {
-          throw new Error("A chave da API do Gemini não foi encontrada.");
-        }
-
-        const ai = new GoogleGenAI({ apiKey });
-        const fullText = segments.map(s => s.text).join('\n\n');
-
-        const response = await ai.models.generateContent({
-          model: 'gemini-3-flash-preview',
-          contents: [
-            { text: `Você é um assistente de reuniões. Aqui está a transcrição da reunião:\n\n${fullText}\n\nO usuário solicitou: ${assistantPrompt}\n\nResponda de forma profissional e formatada (use markdown se necessário, mas mantenha limpo). Se pedirem para separar locutores, use sua melhor estimativa baseada no contexto. Se pedirem tradução, traduza preservando o tom.` }
-          ]
-        });
-
-        if (response.text) {
-          setAssistantResponse(response.text);
-        }
     } catch (err: any) {
-        console.error("Assistant error:", err);
-        let msg = err.message || 'Falha ao processar solicitação';
-        if (msg.includes('API_KEY_SERVICE_BLOCKED') || msg.includes('are blocked')) {
-          msg = "Acesso Bloqueado: A chave da API do Gemini possui restrições ou a API (Generative Language) não está ativada no projeto. Acesse aistudio.google.com/app/apikey para usar uma chave válida.";
-        }
-        alert(`Erro AI: ${msg}`);
+      setError(err.message || 'Erro ao gerar resumo.');
     } finally {
       setIsProcessingAI(false);
     }
   };
 
-  const exportAssistantResponse = () => {
-    if (!assistantResponse) return;
-    const blob = new Blob([assistantResponse], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ia_reuniao_${Date.now()}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  // Chat com a transcrição
+  const handleChatRequest = async () => {
+    if (!chatPrompt.trim() || segments.length === 0) return;
+    setIsProcessingAI(true);
+    setChatResponse('');
+    try {
+      const response = await chatWithTranscript(segments, chatPrompt, lang, userApiKey);
+      setChatResponse(response);
+    } catch (err: any) {
+      setError(err.message || 'Erro no chat com IA.');
+    } finally {
+      setIsProcessingAI(false);
+    }
   };
+
+  const handleSave = () => {
+    const source: MeetingSource = captureMode === 'system' ? 'system' : 'mic';
+    onSave(segments, source, audioBlob);
+  };
+
+  const isProcessing = isTranscribing || uploadLoading || isProcessingAI;
+  const hasContent = segments.length > 0;
 
   return (
-    <div className="flex flex-col h-full max-w-4xl mx-auto py-8">
-      {/* Header with Selectors */}
-      <div className="flex items-center justify-between px-6 mb-4 flex-wrap gap-4">
+    <div className="flex flex-col h-full max-w-4xl mx-auto py-6">
+
+      {/* Header */}
+      <div className="flex items-center justify-between px-6 mb-4 flex-wrap gap-3">
         <h2 className="text-sm font-mono uppercase tracking-[0.2em] text-white/30 flex items-center gap-2">
-          <div className={cn("w-2 h-2 rounded-full", isRecording ? "bg-red-500 animate-pulse" : "bg-white/10")} />
-          {isRecording ? "Gravando" : "Pronto para gravar"}
+          <div className={cn(
+            "w-2 h-2 rounded-full transition-colors",
+            isRecording ? "bg-red-500 animate-pulse" :
+            isTranscribing ? "bg-blue-400 animate-pulse" :
+            "bg-white/10"
+          )} />
+          {isRecording ? 'Gravando...' : isTranscribing ? 'Transcrevendo...' : 'Pronto'}
         </h2>
 
-        <div className="flex items-center gap-2">
-          {/* Capture Mode Toggle */}
-          <div className="flex flex-col items-end gap-1">
-            <div className="flex bg-white/5 p-1 rounded-xl border border-white/5">
-              <button
-                onClick={() => setCaptureMode('mic')}
-                disabled={isRecording}
-                className={cn(
-                  "px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-all",
-                  captureMode === 'mic' ? "bg-white text-black" : "text-white/40 hover:text-white/60"
-                )}
-              >
-                Mic
-              </button>
-              <button
-                onClick={() => setCaptureMode('system')}
-                disabled={isRecording}
-                className={cn(
-                  "px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-all",
-                  captureMode === 'system' ? "bg-white text-black" : "text-white/40 hover:text-white/60",
-                  !(typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && "opacity-30"
-                )}
-              >
-                Meeting
-              </button>
-            </div>
-            {captureMode === 'system' && !isRecording && (
-              <span className="text-[9px] text-blue-400 font-medium animate-pulse">
-                Marque "Compartilhar áudio" ao iniciar
-              </span>
-            )}
-            {!(typeof navigator !== 'undefined' && navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && !isRecording && (
-               <span className="text-[9px] text-white/20">Apenas Desktop</span>
-            )}
+        <div className="flex items-center gap-2 flex-wrap">
+
+          {/* Modo de captura */}
+          <div className="flex bg-white/5 p-1 rounded-xl border border-white/5">
+            <button
+              onClick={() => setCaptureMode('mic')}
+              disabled={isRecording}
+              className={cn(
+                "px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-all",
+                captureMode === 'mic' ? "bg-white text-black" : "text-white/40 hover:text-white/60"
+              )}
+            >
+              Mic
+            </button>
+            <button
+              onClick={() => setCaptureMode('system')}
+              disabled={isRecording}
+              className={cn(
+                "px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-all",
+                captureMode === 'system' ? "bg-white text-black" : "text-white/40 hover:text-white/60"
+              )}
+            >
+              Meeting
+            </button>
           </div>
 
-          <div className="relative group">
-            <div className="flex items-center gap-2 bg-white/5 border border-white/5 rounded-xl px-3 py-1.5 text-xs text-white/60 focus-within:border-white/20 transition-all">
-              <Languages className="w-4 h-4" />
-              <select 
-                value={lang} 
-                onChange={(e) => handleLangChange(e.target.value)}
-                disabled={isRecording}
-                className="bg-transparent outline-none cursor-pointer disabled:cursor-not-allowed pr-4"
-              >
-                {LANGUAGES.map((l) => (
-                  <option key={l.code} value={l.code} className="bg-[#050505]">
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+          {/* Idioma */}
+          <div className="flex items-center gap-2 bg-white/5 border border-white/5 rounded-xl px-3 py-1.5 text-xs text-white/60">
+            <Languages className="w-4 h-4" />
+            <select
+              value={lang}
+              onChange={(e) => handleLangChange(e.target.value)}
+              disabled={isRecording}
+              className="bg-transparent outline-none cursor-pointer"
+            >
+              {LANGUAGES.map((l) => (
+                <option key={l.code} value={l.code} className="bg-[#050505]">
+                  {l.name}
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* Upload de áudio (WhatsApp / gravações externas) */}
+          <label className={cn(
+            "flex items-center gap-1.5 px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded-xl border transition-all cursor-pointer",
+            "bg-white/5 border-white/5 text-white/40 hover:text-white/70 hover:border-white/10",
+            isRecording && "opacity-30 pointer-events-none"
+          )}>
+            <Upload className="w-3.5 h-3.5" />
+            Upload
+            <input
+              type="file"
+              accept="audio/*"
+              className="hidden"
+              onChange={handleUpload}
+              disabled={isRecording}
+            />
+          </label>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto space-y-6 px-4 scrollbar-hide py-10">
-        {segments.length === 0 && !interimText && !isRecording && (
+      {/* Aviso modo Meeting */}
+      {captureMode === 'system' && !isRecording && (
+        <div className="mx-6 mb-3 px-4 py-2 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs text-blue-300 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          Ao iniciar, marque "Compartilhar áudio do sistema" na janela do browser
+        </div>
+      )}
+
+      {/* Aviso upload WhatsApp */}
+      {captureMode === 'mic' && !isRecording && !hasContent && (
+        <div className="mx-6 mb-3 px-4 py-2 bg-white/5 border border-white/5 rounded-xl text-xs text-white/30 flex items-center gap-2">
+          <Upload className="w-4 h-4 shrink-0" />
+          Gravou uma chamada WhatsApp? Use o botão Upload para transcrever o áudio
+        </div>
+      )}
+
+      {/* Erro */}
+      {error && (
+        <div className="mx-6 mb-3 px-4 py-2 bg-red-500/10 border border-red-500/20 rounded-xl text-xs text-red-300 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          {error}
+          <button onClick={() => setError(null)} className="ml-auto">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Conteúdo principal */}
+      <div className="flex-1 overflow-y-auto space-y-6 px-4 py-6 scrollbar-hide">
+
+        {!hasContent && !interimText && !isRecording && !isProcessing && (
           <div className="h-full flex flex-col items-center justify-center text-white/20 text-center space-y-4">
             <Mic className="w-16 h-16 opacity-10" />
             <p className="text-xl font-medium">Toque no microfone para começar</p>
+            <p className="text-sm text-white/10">ou faça upload de um áudio gravado</p>
           </div>
         )}
 
-        {isProcessingAI && (
+        {isProcessing && (
           <div className="h-full flex flex-col items-center justify-center text-white/50 space-y-4">
             <Loader2 className="w-12 h-12 animate-spin text-blue-400" />
-            <p className="text-lg font-medium animate-pulse">Processando áudio com IA. Isso pode levar alguns minutos...</p>
+            <p className="text-lg font-medium animate-pulse">
+              {isTranscribing || uploadLoading ? 'Transcrevendo com Groq Whisper...' : 'Processando com IA...'}
+            </p>
           </div>
         )}
 
-        {!isProcessingAI && segments.map((segment) => (
+        {!isProcessing && segments.map((segment) => (
           <motion.div
             key={segment.id}
             initial={{ opacity: 0, y: 10 }}
@@ -288,6 +254,7 @@ export function MeetingRecorder({ onSave }: MeetingRecorderProps) {
           >
             <span className="text-[10px] font-mono text-white/30 uppercase tracking-widest">
               {new Date(segment.timestamp).toLocaleTimeString()}
+              {segment.speaker && ` · ${segment.speaker}`}
             </span>
             <p className="text-xl md:text-2xl font-light text-white/90 leading-relaxed whitespace-pre-wrap">
               {segment.text}
@@ -296,198 +263,171 @@ export function MeetingRecorder({ onSave }: MeetingRecorderProps) {
         ))}
 
         {interimText && (
-          <div className="flex flex-col gap-1 opacity-50">
+          <div className="flex flex-col gap-1 opacity-40">
             <span className="text-[10px] font-mono text-white/30 uppercase tracking-widest">
-              Em tempo real {captureMode === 'system' && '(Apenas seu microfone)'}
+              ao vivo...
             </span>
-            <p className="text-xl md:text-2xl font-light text-white leading-relaxed italic">
+            <p className="text-xl font-light text-white leading-relaxed italic">
               {interimText}
             </p>
           </div>
         )}
       </div>
 
-      <div className="p-4 md:p-8 glass-card bg-black/40 border-white/5 rounded-t-[40px] flex items-center justify-between gap-3 md:gap-8">
+      {/* Barra de ações */}
+      <div className="p-4 md:p-6 glass-card bg-black/40 border-white/5 rounded-t-[40px] flex items-center justify-between gap-3">
+
+        {/* Botão principal gravar/parar */}
         {!isRecording ? (
           <button
             onClick={startRecording}
-            className="flex-1 btn-primary py-4 md:py-6 rounded-3xl group flex flex-col items-center justify-center gap-1 md:gap-2 bg-white text-black hover:bg-white/90 min-w-0"
+            disabled={isProcessing}
+            className="flex-1 btn-primary py-4 md:py-5 rounded-3xl flex flex-col items-center justify-center gap-1 bg-white text-black hover:bg-white/90 disabled:opacity-50"
           >
-            <Mic className="text-black w-5 h-5 md:w-6 md:h-6 group-hover:scale-110 transition-transform" />
-            <span className="text-sm md:text-lg font-bold truncate w-full px-2">Iniciar Gravação</span>
+            <Mic className="w-5 h-5" />
+            <span className="text-sm font-bold">Iniciar Gravação</span>
           </button>
         ) : (
           <button
             onClick={stopRecording}
-            className="flex-1 bg-red-500 text-white flex flex-col items-center justify-center gap-1 md:gap-2 py-4 md:py-6 rounded-3xl active:scale-95 transition-all shadow-xl shadow-red-500/20 min-w-0"
+            className="flex-1 bg-red-500 text-white flex flex-col items-center justify-center gap-1 py-4 md:py-5 rounded-3xl active:scale-95 transition-all shadow-xl shadow-red-500/20"
           >
-            <Square className="w-5 h-5 md:w-6 md:h-6 fill-white animate-pulse" />
-            <span className="text-sm md:text-lg font-bold truncate w-full px-2">Parar Gravação</span>
+            <Square className="w-5 h-5 fill-white animate-pulse" />
+            <span className="text-sm font-bold">Parar</span>
           </button>
         )}
 
-        <div className="flex items-center gap-2 md:gap-3 shrink-0">
-          {audioBlob && !isRecording && (
+        {/* Ações secundárias */}
+        <div className="flex items-center gap-2 shrink-0">
+
+          {hasContent && !isRecording && (
             <button
-              onClick={handleTranscribeWithAI}
-              disabled={isProcessingAI}
-              className="w-12 h-12 md:w-16 md:h-16 glass rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-blue-400 hover:bg-blue-400/10 transition-colors disabled:opacity-50 group border border-white/5"
-              title="Transcrever com IA"
+              onClick={handleSummarize}
+              disabled={isProcessing}
+              className="w-14 h-14 glass rounded-2xl flex flex-col items-center justify-center text-purple-400 hover:bg-purple-400/10 transition-colors disabled:opacity-50 border border-white/5"
+              title="Resumo + Action Items"
             >
-              {isProcessingAI ? <Loader2 className="w-4 h-4 md:w-5 md:h-5 animate-spin" /> : <Sparkles className="w-4 h-4 md:w-5 md:h-5 group-hover:scale-110 transition-transform" />}
-              <span className="text-[7px] md:text-[8px] uppercase font-bold mt-1">IA Trans</span>
+              {isProcessingAI ? <Loader2 className="w-5 h-5 animate-spin" /> : <Brain className="w-5 h-5" />}
+              <span className="text-[7px] uppercase font-bold mt-1">Resumo</span>
             </button>
           )}
 
-          {segments.length > 0 && !isRecording && (
+          {hasContent && !isRecording && (
             <button
-              onClick={() => setIsAssistantOpen(true)}
-              className="w-12 h-12 md:w-16 md:h-16 glass rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-blue-400 hover:bg-blue-400/10 transition-colors border border-white/5 group shadow-lg shadow-blue-500/5"
-              title="Solicitações customizadas com IA"
+              onClick={() => setIsChatOpen(true)}
+              disabled={isProcessing}
+              className="w-14 h-14 glass rounded-2xl flex flex-col items-center justify-center text-blue-400 hover:bg-blue-400/10 transition-colors border border-white/5"
+              title="Chat com IA"
             >
-              <MessageSquare className="w-4 h-4 md:w-5 md:h-5 group-hover:scale-110 transition-transform" />
-              <span className="text-[7px] md:text-[8px] uppercase font-bold mt-1">IA Chat</span>
+              <MessageSquare className="w-5 h-5" />
+              <span className="text-[7px] uppercase font-bold mt-1">Chat</span>
             </button>
           )}
 
-          {segments.length > 0 && !isRecording && (
+          {hasContent && !isRecording && (
             <button
-              onClick={handleSummarizeWithNvidia}
-              disabled={isProcessingAI}
-              className="w-12 h-12 md:w-16 md:h-16 glass rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-purple-400 hover:bg-purple-400/10 transition-colors disabled:opacity-50 group border border-white/5"
-              title="Resumir com IA"
-            >
-              {isProcessingAI ? <Loader2 className="w-4 h-4 md:w-5 md:h-5 animate-spin" /> : <Brain className="w-4 h-4 md:w-5 md:h-5 group-hover:scale-110 transition-transform" />}
-              <span className="text-[7px] md:text-[8px] uppercase font-bold mt-1">Resumo</span>
-            </button>
-          )}
-
-          {(segments.length > 0 || audioBlob) && !isRecording && (
-            <button
-              onClick={() => onSave(segments, audioUrl)}
-              className="w-14 h-12 md:w-20 md:h-16 glass rounded-xl md:rounded-2xl flex flex-col items-center justify-center text-green-400 hover:bg-green-400/10 transition-colors group border-2 border-green-400/20 shadow-[0_0_20px_rgba(74,222,128,0.1)]"
+              onClick={handleSave}
+              disabled={isProcessing}
+              className="w-16 h-14 glass rounded-2xl flex flex-col items-center justify-center text-green-400 hover:bg-green-400/10 transition-colors border-2 border-green-400/20"
               title="Salvar Reunião"
             >
-              <Save className="w-5 h-5 md:w-6 md:h-6 group-hover:scale-110 transition-transform" />
-              <span className="text-[8px] md:text-[9px] uppercase font-black mt-0.5 md:mt-1">SALVAR</span>
+              <Save className="w-5 h-5" />
+              <span className="text-[7px] uppercase font-black mt-1">Salvar</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* AI Assistant Modal */}
+      {/* Modal Chat IA */}
       <AnimatePresence>
-        {isAssistantOpen && (
+        {isChatOpen && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-            onClick={() => !isProcessingAI && setIsAssistantOpen(false)}
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => !isProcessingAI && setIsChatOpen(false)}
           >
             <motion.div
-              initial={{ scale: 0.95, y: 20 }}
-              animate={{ scale: 1, y: 0 }}
-              exit={{ scale: 0.95, y: 20 }}
+              initial={{ y: 40, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 40, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-2xl bg-[#0a0a0a] border border-white/10 rounded-[32px] overflow-hidden flex flex-col max-h-[80vh] shadow-2xl"
+              className="w-full max-w-2xl bg-[#0a0a0a] border border-white/10 rounded-[28px] overflow-hidden flex flex-col max-h-[80vh]"
             >
-              <div className="p-6 border-b border-white/5 flex items-center justify-between bg-white/[0.02]">
+              <div className="p-5 border-b border-white/5 flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center">
-                    <Sparkles className="w-5 h-5 text-blue-400" />
+                  <div className="w-9 h-9 rounded-full bg-blue-500/10 flex items-center justify-center">
+                    <Sparkles className="w-4 h-4 text-blue-400" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-white">IA Assistant</h3>
-                    <p className="text-[10px] text-white/40 uppercase tracking-widest font-mono">Custom Requests</p>
+                    <h3 className="font-bold text-white text-sm">Chat com a Transcrição</h3>
+                    <p className="text-[10px] text-white/30 uppercase tracking-widest">Groq LLaMA 70B</p>
                   </div>
                 </div>
-                <button 
-                  onClick={() => setIsAssistantOpen(false)}
-                  className="p-2 hover:bg-white/5 rounded-full transition-colors text-white/40 hover:text-white"
-                >
+                <button onClick={() => setIsChatOpen(false)} className="p-2 hover:bg-white/5 rounded-full text-white/40">
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                {assistantResponse ? (
-                  <div className="space-y-4">
-                    <div className="p-4 bg-white/[0.03] border border-white/5 rounded-2xl">
-                      <p className="text-sm text-white/50 mb-2 font-medium flex items-center gap-2">
-                        <MessageSquare className="w-3 h-3" /> Sua solicitação:
-                      </p>
-                      <p className="text-sm text-white/80">{assistantPrompt}</p>
+              <div className="flex-1 overflow-y-auto p-5 space-y-4">
+                {chatResponse ? (
+                  <div className="space-y-3">
+                    <div className="p-3 bg-white/5 rounded-xl text-sm text-white/60">{chatPrompt}</div>
+                    <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-xl text-sm text-white/90 whitespace-pre-wrap leading-relaxed">
+                      {chatResponse}
                     </div>
-                    <div className="p-6 bg-blue-500/5 border border-blue-500/10 rounded-2xl prose prose-invert max-w-none">
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap text-white/90">
-                        {assistantResponse}
-                      </p>
-                    </div>
+                    <button
+                      onClick={() => { setChatResponse(''); setChatPrompt(''); }}
+                      className="text-xs text-white/30 hover:text-white/60 flex items-center gap-1"
+                    >
+                      <CheckCircle2 className="w-3 h-3" /> Nova pergunta
+                    </button>
                   </div>
                 ) : (
-                  <div className="h-auto py-8 flex flex-col items-center justify-center text-center space-y-4 text-white/20">
-                    <Brain className="w-12 h-12 opacity-10" />
-                    <p className="text-sm px-10">Peça resumos específicos, traduções ou análises detalhadas da sua transcrição.</p>
-                    <div className="flex flex-wrap items-center justify-center gap-2 mt-4 px-4 max-w-lg">
+                  <div className="py-6 flex flex-col items-center gap-4 text-white/20 text-center">
+                    <Brain className="w-10 h-10 opacity-10" />
+                    <p className="text-sm">Faça perguntas sobre a reunião</p>
+                    <div className="flex flex-wrap justify-center gap-2">
                       {[
-                        "Resuma os 3 pontos principais",
-                        "Extraia as tarefas e responsáveis",
-                        "Faça uma ata formal da reunião",
-                        "Liste os tópicos discutidos principais"
-                      ].map(prompt => (
+                        'Resuma os 3 pontos principais',
+                        'Extraia as tarefas e responsáveis',
+                        'Faça uma ata formal',
+                        'Liste os tópicos discutidos',
+                      ].map((p) => (
                         <button
-                          key={prompt}
-                          onClick={() => setAssistantPrompt(prompt)}
-                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/50 hover:text-white text-xs rounded-full border border-white/5 transition-colors text-left"
+                          key={p}
+                          onClick={() => setChatPrompt(p)}
+                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/50 hover:text-white text-xs rounded-full border border-white/5 transition-colors"
                         >
-                          {prompt}
+                          {p}
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
-                <div ref={responseEndRef} />
               </div>
 
-              <div className="p-6 bg-white/[0.02] border-t border-white/5">
-                {assistantResponse && (
-                  <button
-                    onClick={exportAssistantResponse}
-                    className="mb-4 w-full py-3 px-4 bg-green-500/10 hover:bg-green-500/20 text-green-400 rounded-xl flex items-center justify-center gap-2 transition-all font-bold text-xs uppercase tracking-wider"
-                  >
-                    <Download className="w-4 h-4" /> Exportar Resultado para TXT
-                  </button>
-                )}
-                
-                <div className="relative">
-                  <textarea
-                    value={assistantPrompt}
-                    onChange={(e) => setAssistantPrompt(e.target.value)}
-                    placeholder="Ex: Resuma os 3 pontos principais, Seque em Português, Separe quem falou o quê..."
-                    className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder:text-white/20 focus:border-blue-500/50 focus:outline-none transition-all resize-none h-24"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleAssistantRequest();
-                      }
-                    }}
-                  />
-                  <button
-                    onClick={handleAssistantRequest}
-                    disabled={isProcessingAI || !assistantPrompt.trim() || segments.length === 0}
-                    className="absolute bottom-3 right-3 p-2 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-all disabled:opacity-20 disabled:cursor-not-allowed group shadow-lg shadow-blue-500/20"
-                  >
-                    {isProcessingAI ? (
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                    ) : (
-                      <Send className="w-5 h-5 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-                    )}
-                  </button>
-                </div>
-                <p className="mt-2 text-[10px] text-white/20 text-center uppercase tracking-tighter">
-                  Pressione Enter para enviar (Shift+Enter para nova linha)
-                </p>
+              <div className="p-4 border-t border-white/5 relative">
+                <textarea
+                  value={chatPrompt}
+                  onChange={(e) => setChatPrompt(e.target.value)}
+                  placeholder="Ex: Quais foram as decisões tomadas?"
+                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder:text-white/20 focus:border-blue-500/50 focus:outline-none resize-none h-20"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleChatRequest();
+                    }
+                  }}
+                />
+                <button
+                  onClick={handleChatRequest}
+                  disabled={isProcessingAI || !chatPrompt.trim()}
+                  className="absolute bottom-7 right-7 p-2 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:opacity-20 transition-all"
+                >
+                  {isProcessingAI ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                </button>
               </div>
             </motion.div>
           </motion.div>
