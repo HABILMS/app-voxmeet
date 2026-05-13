@@ -6,27 +6,40 @@ import {
   Star, Crown, Bitcoin
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { signInWithPopup } from 'firebase/auth';
+import { signInWithPopup, signInWithRedirect } from 'firebase/auth';
 import { auth, googleProvider } from '../lib/firebase';
 import { PLAN_CONFIGS } from '../types';
 
 export default function LandingPage() {
   const navigate = useNavigate();
 
-  const handleGetStarted = async () => {
-    try {
-      if (auth.currentUser) { navigate('/app'); return; }
-      await signInWithPopup(auth, googleProvider);
-      navigate('/app');
-    } catch (e: any) {
-      console.error(e);
-      if (e.code === 'auth/unauthorized-domain') {
-        alert(`Domínio não autorizado no Firebase: ${window.location.hostname}`);
-        return;
-      }
-      navigate('/app');
+  const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+const handleGetStarted = async () => {
+  try {
+    if (auth.currentUser) { navigate("/app"); return; }
+    await signInWithPopup(auth, googleProvider);
+    navigate("/app");
+  } catch (e: any) {
+    console.error(e);
+    if (e?.code === "auth/unauthorized-domain") {
+      alert(`Dominio nao autorizado no Firebase: ${window.location.hostname}`);
+      return;
     }
-  };
+    navigate("/app");
+  }
+};
+
+
+
+
+
+
+
+
+
+
+
 
   return (
     <div className="min-h-screen bg-[#050505] text-white overflow-x-hidden font-sans">

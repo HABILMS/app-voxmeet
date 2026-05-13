@@ -2,7 +2,7 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mic, List, Settings, Sparkles, LogOut, LogIn, HelpCircle, Zap } from 'lucide-react';
-import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, signInWithRedirect, getRedirectResult, signOut, User } from 'firebase/auth';
 import {
   collection, query, orderBy, onSnapshot,
   doc, setDoc, deleteDoc, updateDoc, getDoc
@@ -33,6 +33,12 @@ export default function Dashboard() {
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
+
+  // Auth + perfil do usuário
+  // Captura resultado do redirect (mobile)
+  useEffect(() => {
+    getRedirectResult(auth).catch(e => console.error("Redirect result error:", e));
+  }, []);
 
   // Auth + perfil do usuário
   useEffect(() => {
@@ -83,10 +89,15 @@ export default function Dashboard() {
     return () => unsubscribe();
   }, [currentUser]);
 
-  const handleLogin = async () => {
-    try { await signInWithPopup(auth, googleProvider); }
-    catch (e) { console.error('Login error:', e); }
-  };
+  const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+const handleLogin = async () => {
+  try {
+    await signInWithPopup(auth, googleProvider);
+  } catch (e) {
+    console.error("Login error:", e);
+  }
+};
 
   const handleLogout = () => {
     signOut(auth);
@@ -126,24 +137,29 @@ export default function Dashboard() {
       ? Math.round((segments[segments.length - 1].timestamp - segments[0].timestamp) / 1000)
       : 0;
 
-    const newMeeting: Omit<Meeting, 'id'> = {
-      title: `Reunião ${new Date().toLocaleDateString('pt-BR')}`,
+    // Firestore nao aceita undefined
+    const newMeeting: Record<string, any> = {
+      title: `Reuniao ${new Date().toLocaleDateString("pt-BR")}`,
       createdAt: Date.now(),
       duration: durationSecs,
-      transcript: segments,
-      source,
-      status: 'done',
+      transcript: segments.map(s => ({
+        id: s.id,
+        text: s.text,
+        timestamp: s.timestamp,
+        ...(s.speaker ? { speaker: s.speaker } : {}),
+      })),
+      source: source ?? "mic",
+      status: "done",
       userId: currentUser.uid,
     };
 
     try {
       await setDoc(doc(db, path), newMeeting);
-      setSelectedMeeting({ id: meetingId, ...newMeeting });
-      setView('detail');
+      setSelectedMeeting({ id: meetingId, ...newMeeting } as Meeting);
+      setView("detail");
 
-      // Atualiza minutos usados
       const mins = Math.ceil(durationSecs / 60);
-      const userDocRef = doc(db, 'users', currentUser.uid);
+      const userDocRef = doc(db, "users", currentUser.uid);
       await updateDoc(userDocRef, {
         minutesUsed: (userProfile?.minutesUsed || 0) + mins
       });

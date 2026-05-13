@@ -1,5 +1,5 @@
 // src/components/MeetingRecorder.tsx — VoxMeet
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Mic, Square, Save, Languages, Sparkles,
@@ -40,6 +40,25 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
   const [chatPrompt, setChatPrompt] = useState('');
   const [chatResponse, setChatResponse] = useState('');
   const [uploadLoading, setUploadLoading] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Contador de tempo de gravação
+  useEffect(() => {
+    if (isRecording) {
+      setElapsed(0);
+      timerRef.current = setInterval(() => setElapsed(s => s + 1), 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isRecording]);
+
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60).toString().padStart(2, '0');
+    const s = (secs % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
 
   const handleLangChange = (newLang: string) => {
     setLang(newLang);
@@ -293,7 +312,7 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
             className="flex-1 bg-red-500 text-white flex flex-col items-center justify-center gap-1 py-4 md:py-5 rounded-3xl active:scale-95 transition-all shadow-xl shadow-red-500/20"
           >
             <Square className="w-5 h-5 fill-white animate-pulse" />
-            <span className="text-sm font-bold">Parar</span>
+            <span className="text-sm font-bold font-mono">{formatTime(elapsed)}</span>
           </button>
         )}
 
