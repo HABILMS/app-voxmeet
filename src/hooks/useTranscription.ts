@@ -105,12 +105,13 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       streamRef.current = stream;
 
       // Determina o melhor formato suportado
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : 'audio/mp4';
-
+       const mimeType = MediaRecorder.isTypeSupported('audio/mp4')
+        ? 'audio/mp4'
+       : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+       ? 'audio/webm;codecs=opus'
+       : MediaRecorder.isTypeSupported('audio/webm')
+       ? 'audio/webm'
+       : 'audio/ogg';
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
       audioChunksRef.current = [];
 
