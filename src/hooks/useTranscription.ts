@@ -6,7 +6,18 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import { TranscriptSegment } from '../types';
 import { transcribeAudio } from '../services/groqService';
 
+// Detecta mobile
+const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
 export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | null) {
+  const mobile = isMobile();
+  const [isRecording, setIsRecording] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [interimText, setInterimText] = useState('');
+  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
+  const [captureMode, setCaptureMode] = useState<'mic' | 'system'>('mic');
+  const [error, setError] = useState<string | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
@@ -71,7 +82,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
     try {
       let stream: MediaStream;
 
-      if (captureMode === 'system') {
+      if (captureMode === 'system' && !mobile) {
         // Captura áudio do sistema (meetings no computador)
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         const destination = audioContext.createMediaStreamDestination();
@@ -105,13 +116,12 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       streamRef.current = stream;
 
       // Determina o melhor formato suportado
-       const mimeType = MediaRecorder.isTypeSupported('audio/mp4')
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      const mimeType = MediaRecorder.isTypeSupported('audio/mp4')
         ? 'audio/mp4'
-       : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-       ? 'audio/webm;codecs=opus'
-       : MediaRecorder.isTypeSupported('audio/webm')
-       ? 'audio/webm'
-       : 'audio/ogg';
+        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : 'audio/webm';
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
       audioChunksRef.current = [];
 
@@ -161,17 +171,38 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   // Transcrição com Groq Whisper
   const processTranscription = async (blob: Blob) => {
     setIsTranscribing(true);
+    setTranscribeProgress(null);
     setSegments([]);
     try {
-      const result = await transcribeAudio(blob, lang.split('-')[0], userApiKey);
+      const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
+      console.log(`Iniciando transcricao: ${sizeMB}MB`);
+      const result = await transcribeAudio(
+        blob,
+        lang.split("-")[0],
+        userApiKey,
+        (current, total) => setTranscribeProgress({ current, total })
+      );
       setSegments(result);
     } catch (err: any) {
-      console.error('Erro na transcrição Groq:', err);
-      setError(err.message || 'Erro ao transcrever áudio.');
+      console.error("Erro na transcricao Groq:", err);
+      setError(err.message || "Erro ao transcrever audio.");
     } finally {
       setIsTranscribing(false);
+      setTranscribeProgress(null);
     }
   };
+
+
+
+
+
+
+
+
+
+
+
+
 
   // Re-transcrever manualmente (se precisar)
   const retranscribe = useCallback(async () => {
@@ -180,8 +211,10 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   }, [audioBlob, userApiKey, lang]);
 
   return {
+    isMobileDevice: mobile,
     isRecording,
     isTranscribing,
+    transcribeProgress,
     segments,
     setSegments,
     interimText,
