@@ -2,7 +2,7 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  ArrowLeft, Download, Sparkles, Trash2,
+  ArrowLeft, Download, Sparkles, Trash2, Pencil,
   Loader2, MessageSquare, Brain, X, Send,
   FileText, CheckCircle2, Copy, Check
 } from 'lucide-react';
@@ -14,15 +14,18 @@ interface MeetingDetailProps {
   meeting: Meeting;
   onBack: () => void;
   onDelete: (id: string) => void;
+  onRename: (id: string, newTitle: string) => void;
   onSummarize: (id: string) => void;
   isSummarizing: boolean;
   userProfile?: UserProfile | null;
 }
 
 export function MeetingDetail({
-  meeting, onBack, onDelete, onSummarize,
+  meeting, onBack, onDelete, onRename, onSummarize,
   isSummarizing, userProfile
 }: MeetingDetailProps) {
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [editTitle, setEditTitle] = useState(meeting.title || "");
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [chatPrompt, setChatPrompt] = useState('');
   const [chatResponse, setChatResponse] = useState('');
@@ -115,6 +118,9 @@ export function MeetingDetail({
         </button>
 
         <div className="flex gap-2 flex-wrap">
+          <button onClick={() => { setEditTitle(meeting.title || ""); setIsEditingTitle(true); }} className="btn-secondary text-blue-400 flex items-center gap-2">
+            <Pencil className="w-4 h-4" /> Renomear
+          </button>
           <button
             onClick={() => setIsChatOpen(true)}
             className="btn-secondary text-blue-400 flex items-center gap-2"
@@ -159,9 +165,25 @@ export function MeetingDetail({
 
         {/* Título e metadados */}
         <section className="space-y-2">
-          <h1 className="text-4xl font-serif italic text-white leading-tight">
-            {meeting.title || 'Nova Reunião'}
-          </h1>
+          {isEditingTitle ? (
+            <div className="flex items-center gap-2">
+              <input autoFocus value={editTitle} onChange={e => setEditTitle(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter") { onRename(meeting.id, editTitle); setIsEditingTitle(false); } if (e.key === "Escape") setIsEditingTitle(false); }}
+                className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-3xl font-serif italic text-white outline-none focus:border-blue-500/50"
+              />
+              <button onClick={() => { onRename(meeting.id, editTitle); setIsEditingTitle(false); }} className="p-2 text-green-400 hover:bg-green-400/10 rounded-xl"><Check className="w-5 h-5" /></button>
+              <button onClick={() => setIsEditingTitle(false)} className="p-2 text-white/40 hover:bg-white/10 rounded-xl"><X className="w-5 h-5" /></button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 group/title">
+              <h1 className="text-4xl font-serif italic text-white leading-tight">{meeting.title || "Nova Reunião"}</h1>
+              <button onClick={() => { setEditTitle(meeting.title || ""); setIsEditingTitle(true); }} className="p-2 text-white/10 hover:text-blue-400 opacity-0 group-hover/title:opacity-100 transition-all rounded-xl hover:bg-blue-400/10">
+                <Pencil className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+
           <div className="flex items-center gap-3 text-white/30 font-mono text-xs uppercase tracking-widest flex-wrap">
             <span>{new Date(meeting.createdAt).toLocaleString()}</span>
             <span>·</span>
