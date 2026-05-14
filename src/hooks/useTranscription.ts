@@ -1,25 +1,14 @@
 // src/hooks/useTranscription.ts — VoxMeet
-// Usa Web Speech API em tempo real (feedback visual)
-// + Groq Whisper no final para transcrição precisa
-
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { TranscriptSegment } from '../types';
 import { transcribeAudio } from '../services/groqService';
 
-// Detecta mobile
-const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const isMobileDevice = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | null) {
-  const mobile = isMobile();
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
-  const [interimText, setInterimText] = useState('');
-  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [captureMode, setCaptureMode] = useState<'mic' | 'system'>('mic');
-  const [error, setError] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isTranscribing, setIsTranscribing] = useState(false);
+  const [transcribeProgress, setTranscribeProgress] = useState<{ current: number; total: number } | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [interimText, setInterimText] = useState('');
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
@@ -32,7 +21,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   const streamRef = useRef<MediaStream | null>(null);
   const isRecordingRef = useRef(false);
 
-  // Web Speech API — feedback em tempo real (interim)
+  // Web Speech API — feedback em tempo real
   useEffect(() => {
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -46,9 +35,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
     recognition.onresult = (event: any) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        if (!event.results[i].isFinal) {
-          interim += event.results[i][0].transcript;
-        }
+        if (!event.results[i].isFinal) interim += event.results[i][0].transcript;
       }
       setInterimText(interim);
     };
@@ -67,10 +54,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
     };
 
     recognitionRef.current = recognition;
-
-    return () => {
-      try { recognitionRef.current?.stop(); } catch (e) {}
-    };
+    return () => { try { recognitionRef.current?.stop(); } catch (e) {} };
   }, [lang]);
 
   const startRecording = useCallback(async () => {
@@ -81,47 +65,34 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
 
     try {
       let stream: MediaStream;
+      const mobile = isMobileDevice();
 
       if (captureMode === 'system' && !mobile) {
-        // Captura áudio do sistema (meetings no computador)
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         const destination = audioContext.createMediaStreamDestination();
-
-        // Tenta capturar áudio da tela
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        });
-
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         if (screenStream.getAudioTracks().length > 0) {
-          const sysSource = audioContext.createMediaStreamSource(screenStream);
-          sysSource.connect(destination);
+          audioContext.createMediaStreamSource(screenStream).connect(destination);
         }
-
-        // Mistura com microfone
         try {
           const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const micSource = audioContext.createMediaStreamSource(micStream);
-          micSource.connect(destination);
-        } catch (e) {
-          console.warn('Microfone não disponível para mix', e);
-        }
-
+          audioContext.createMediaStreamSource(micStream).connect(destination);
+        } catch (e) { console.warn('Mic não disponível para mix', e); }
         stream = destination.stream;
       } else {
-        // Apenas microfone
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       }
 
       streamRef.current = stream;
 
-      // Determina o melhor formato suportado
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       const mimeType = MediaRecorder.isTypeSupported('audio/mp4')
         ? 'audio/mp4'
         : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
         ? 'audio/webm;codecs=opus'
-        : 'audio/webm';
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : 'audio/ogg';
+
       const mediaRecorder = new MediaRecorder(stream, { mimeType });
       audioChunksRef.current = [];
 
@@ -132,17 +103,14 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       mediaRecorder.onstop = async () => {
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         setAudioBlob(blob);
-        // Auto-transcreve com Groq Whisper ao parar
         await processTranscription(blob);
       };
 
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start(1000);
-
       isRecordingRef.current = true;
       setIsRecording(true);
 
-      // Inicia feedback visual em tempo real
       try { recognitionRef.current?.start(); } catch (e) {}
 
     } catch (err: any) {
@@ -157,61 +125,41 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
     isRecordingRef.current = false;
     setIsRecording(false);
     setInterimText('');
-
-    if (mediaRecorderRef.current?.state !== 'inactive') {
-      mediaRecorderRef.current?.stop();
-    }
-
-    streamRef.current?.getTracks().forEach((t) => t.stop());
+    if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
+    streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
-
     try { recognitionRef.current?.stop(); } catch (e) {}
   }, []);
 
-  // Transcrição com Groq Whisper
   const processTranscription = async (blob: Blob) => {
     setIsTranscribing(true);
     setTranscribeProgress(null);
     setSegments([]);
     try {
       const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
-      console.log(`Iniciando transcricao: ${sizeMB}MB`);
+      console.log(`Iniciando transcrição: ${sizeMB}MB`);
       const result = await transcribeAudio(
         blob,
-        lang.split("-")[0],
+        lang.split('-')[0],
         userApiKey,
         (current, total) => setTranscribeProgress({ current, total })
       );
       setSegments(result);
     } catch (err: any) {
-      console.error("Erro na transcricao Groq:", err);
-      setError(err.message || "Erro ao transcrever audio.");
+      console.error('Erro na transcrição Groq:', err);
+      setError(err.message || 'Erro ao transcrever áudio.');
     } finally {
       setIsTranscribing(false);
       setTranscribeProgress(null);
     }
   };
 
-
-
-
-
-
-
-
-
-
-
-
-
-  // Re-transcrever manualmente (se precisar)
   const retranscribe = useCallback(async () => {
     if (!audioBlob) return;
     await processTranscription(audioBlob);
   }, [audioBlob, userApiKey, lang]);
 
   return {
-    isMobileDevice: mobile,
     isRecording,
     isTranscribing,
     transcribeProgress,
@@ -224,6 +172,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
     retranscribe,
     captureMode,
     setCaptureMode,
+    isMobileDevice: isMobileDevice(),
     error,
     setError,
   };
