@@ -82,7 +82,15 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
     setError(null);
 
     try {
-      const result = await transcribeAudio(file, lang.split('-')[0], userApiKey);
+      const result = await transcribeAudio(
+        file,
+        lang.split('-')[0],
+        userApiKey,
+        (current, total) => {
+          if (total > 1) setError(`Transcrevendo parte ${current} de ${total}...`);
+        }
+      );
+      setError(null);
       setSegments(result);
     } catch (err: any) {
       setError(err.message || 'Erro ao transcrever arquivo.');
