@@ -126,10 +126,6 @@ const handleLogin = async () => {
   ) => {
     if (!currentUser) { setShowPremium(true); return; }
 
-    if (!checkMeetingsLimit()) {
-      setShowPremium(true);
-      return;
-    }
 
     const meetingId = Math.random().toString(36).substr(2, 9);
     const path = `users/${currentUser.uid}/meetings/${meetingId}`;
