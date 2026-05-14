@@ -169,17 +169,18 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
             >
               Mic
             </button>
-            <button
-              onClick={() => setCaptureMode('system')}
-              disabled={isRecording}
-              className={cn(
-                "px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-all",
-                captureMode === 'system' ? "bg-white text-black" : "text-white/40 hover:text-white/60"
-              )}
-            >
-              Meeting
-            </button>
-          </div>
+{!/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) && (
+  <button
+    onClick={() => setCaptureMode('system')}
+    disabled={isRecording}
+    className={cn(
+      "px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider rounded-lg transition-all",
+      captureMode === 'system' ? "bg-white text-black" : "text-white/40 hover:text-white/60"
+    )}
+  >
+    Meeting
+  </button>
+)}          </div>
 
           {/* Idioma */}
           <div className="flex items-center gap-2 bg-white/5 border border-white/5 rounded-xl px-3 py-1.5 text-xs text-white/60">
