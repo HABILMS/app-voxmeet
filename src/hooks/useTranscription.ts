@@ -75,16 +75,13 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
         setInterimText('');
         setAudioBlob(null);
 
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const destination = audioContext.createMediaStreamDestination();
-        if (screenStream.getAudioTracks().length > 0) {
-          audioContext.createMediaStreamSource(screenStream).connect(destination);
+        if (screenStream.getAudioTracks().length === 0) {
+          screenStream.getTracks().forEach(t => t.stop());
+          throw new Error('Nenhuma trilha de áudio capturada. Marque "Compartilhar áudio" ao selecionar a janela.');
         }
-        try {
-          const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          audioContext.createMediaStreamSource(micStream).connect(destination);
-        } catch (e) { console.warn('Mic não disponível para mix', e); }
-        stream = destination.stream;
+
+        // Usa o stream direto sem AudioContext — gera arquivo mais compatível com Groq
+        stream = new MediaStream(screenStream.getAudioTracks());
       } else {
         // Modo mic — reset antes de pedir permissao
         setError(null);
@@ -96,13 +93,20 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
 
       streamRef.current = stream;
 
-      const mimeType = MediaRecorder.isTypeSupported('audio/mp4')
-        ? 'audio/mp4'
-        : MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/webm')
-        ? 'audio/webm'
-        : 'audio/ogg';
+      // webm/opus é o formato mais compatível com Groq Whisper
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+        ? "audio/webm"
+        : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
+        ? "audio/ogg;codecs=opus"
+        : "audio/mp4";
+
+
+
+
+
+
 
       // 32kbps = qualidade suficiente para voz, ~14MB/hora vs ~150MB/hora no padrao
       const mediaRecorder = new MediaRecorder(stream, {
