@@ -65,7 +65,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       if (captureMode === 'system' && !mobile) {
         // getDisplayMedia DEVE ser a primeira chamada — Chrome exige gesto direto do usuario
         const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: false,
+          video: true,
           audio: true,
         });
 
