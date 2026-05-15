@@ -93,7 +93,11 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
         ? 'audio/webm'
         : 'audio/ogg';
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
+      // 32kbps = qualidade suficiente para voz, ~14MB/hora vs ~150MB/hora no padrao
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType,
+        audioBitsPerSecond: 32000,
+      });
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (e) => {

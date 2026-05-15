@@ -4,7 +4,7 @@
 import { TranscriptSegment } from '../types';
 
 const GROQ_API = 'https://api.groq.com/openai/v1';
-const MAX_CHUNK_SIZE = 20 * 1024 * 1024; // 20MB por chunk (limite Groq é 25MB)
+const MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB por chunk // 20MB por chunk (limite Groq é 25MB)
 const MAX_CHUNK_DURATION = 10 * 60; // 10 minutos por chunk em segundos
 
 function resolveApiKey(userApiKey?: string | null): string {
