@@ -58,19 +58,25 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   }, [lang]);
 
   const startRecording = useCallback(async () => {
-    setError(null);
-    setSegments([]);
-    setInterimText('');
-    setAudioBlob(null);
-
     try {
       let stream: MediaStream;
       const mobile = isMobileDevice();
 
       if (captureMode === 'system' && !mobile) {
+        // getDisplayMedia DEVE ser a primeira chamada — Chrome exige gesto direto do usuario
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: false,
+          audio: true,
+        });
+
+        // So depois do getDisplayMedia fazemos reset dos estados
+        setError(null);
+        setSegments([]);
+        setInterimText('');
+        setAudioBlob(null);
+
         const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
         const destination = audioContext.createMediaStreamDestination();
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         if (screenStream.getAudioTracks().length > 0) {
           audioContext.createMediaStreamSource(screenStream).connect(destination);
         }
@@ -80,6 +86,11 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
         } catch (e) { console.warn('Mic não disponível para mix', e); }
         stream = destination.stream;
       } else {
+        // Modo mic — reset antes de pedir permissao
+        setError(null);
+        setSegments([]);
+        setInterimText('');
+        setAudioBlob(null);
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       }
 
