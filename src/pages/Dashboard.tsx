@@ -125,7 +125,8 @@ export default function Dashboard() {
     if (!meeting || meeting.summary) return;
     setIsSummarizing(true);
     try {
-      const result = await summarizeMeeting(meeting.transcript, userProfile?.language ?? 'pt-BR', userProfile?.apiKey);
+      const activeLang = localStorage.getItem('voxmeet_lang') || userProfile?.language || 'pt-BR';
+      const result = await summarizeMeeting(meeting.transcript, activeLang, userProfile?.apiKey);
       if (result) {
         const path = `users/${currentUser.uid}/meetings/${id}`;
         await updateDoc(doc(db, path), { summary: result.summary, actionItems: result.actionItems });
