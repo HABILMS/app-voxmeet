@@ -147,6 +147,14 @@ async function startServer() {
   // POST /api/asaas/webhook — Recebe confirmação de pagamento
   // ─────────────────────────────────────────────
   app.post("/api/asaas/webhook", async (req, res) => {
+    // Valida token do Asaas
+    const webhookToken = req.headers["asaas-access-token"] as string;
+    const expectedToken = process.env.ASAAS_WEBHOOK_TOKEN;
+    if (expectedToken && webhookToken !== expectedToken) {
+      console.warn("Webhook token inválido:", webhookToken);
+      return res.status(401).json({ error: "Token inválido" });
+    }
+
     const event = req.body;
     console.log("Asaas webhook:", event.event, event.payment?.id);
 
