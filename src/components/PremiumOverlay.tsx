@@ -54,7 +54,7 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
     if (step === 'pix' && pixData) {
       checkIntervalRef.current = setInterval(async () => {
         try {
-          const r = await fetch(`/api/asaas/check/${pixData.paymentId}`);
+          const r = await fetch(`/api/check?paymentId=${pixData.paymentId}`);
           const data = await r.json();
           setCheckCount(c => c + 1);
           if (data.status === 'RECEIVED' || data.status === 'CONFIRMED') {
@@ -75,7 +75,7 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
     setError(null);
 
     try {
-      const res = await fetch('/api/asaas/checkout', {
+      const res = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
