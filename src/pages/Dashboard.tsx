@@ -136,10 +136,28 @@ export default function Dashboard() {
     finally { setIsSummarizing(false); }
   };
 
+  // Cor do plano — suporta planos novos e legados
+  const getPlanColor = (plan: SubscriptionPlan): string => {
+    const colors: Partial<Record<SubscriptionPlan, string>> = {
+      starter: 'text-white/30',
+      pro: 'text-blue-400',
+      pro_monthly: 'text-blue-400',
+      ultra: 'text-purple-400',
+      pro_annual: 'text-purple-400',
+      power: 'text-amber-400',
+    };
+    return colors[plan] ?? 'text-white/30';
+  };
+
   const PlanBadge = () => {
     const plan = userProfile?.plan ?? 'starter';
-    const colors: Record<SubscriptionPlan, string> = { starter: 'text-white/30', pro_monthly: 'text-blue-400', pro_annual: 'text-purple-400', power: 'text-amber-400' };
-    return <span className={cn('text-[9px] font-bold uppercase tracking-widest', colors[plan])}>{PLAN_CONFIGS[plan].name}</span>;
+    const config = PLAN_CONFIGS[plan];
+    if (!config) return null;
+    return (
+      <span className={cn('text-[9px] font-bold uppercase tracking-widest', getPlanColor(plan))}>
+        {config.name}
+      </span>
+    );
   };
 
   const MinutesIndicator = () => {
@@ -197,25 +215,12 @@ export default function Dashboard() {
               )}
               {view === 'list' && (
                 <motion.div key="list" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="h-[calc(100vh-80px)] overflow-y-auto">
-                  <MeetingList
-                    meetings={meetings}
-                    onSelect={(m) => { setSelectedMeeting(m); setView('detail'); }}
-                    onDelete={handleDeleteMeeting}
-                    onRename={handleRenameMeeting}
-                  />
+                  <MeetingList meetings={meetings} onSelect={(m) => { setSelectedMeeting(m); setView('detail'); }} onDelete={handleDeleteMeeting} onRename={handleRenameMeeting} />
                 </motion.div>
               )}
               {view === 'detail' && selectedMeeting && (
                 <motion.div key="detail" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="h-[calc(100vh-80px)] overflow-y-auto">
-                  <MeetingDetail
-                    meeting={selectedMeeting}
-                    onBack={() => setView('list')}
-                    onDelete={handleDeleteMeeting}
-                    onRename={handleRenameMeeting}
-                    onSummarize={handleSummarizeMeeting}
-                    isSummarizing={isSummarizing}
-                    userProfile={userProfile}
-                  />
+                  <MeetingDetail meeting={selectedMeeting} onBack={() => setView('list')} onDelete={handleDeleteMeeting} onRename={handleRenameMeeting} onSummarize={handleSummarizeMeeting} isSummarizing={isSummarizing} userProfile={userProfile} />
                 </motion.div>
               )}
               {view === 'faq' && (
@@ -226,8 +231,6 @@ export default function Dashboard() {
               {view === 'settings' && (
                 <motion.div key="settings" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="h-[calc(100vh-80px)] overflow-y-auto p-6 max-w-lg mx-auto">
                   <h2 className="text-2xl font-serif italic text-white mb-6">Configurações</h2>
-
-                  {/* Perfil */}
                   <div className="glass-card p-5 rounded-2xl border border-white/5 mb-4">
                     <div className="flex items-center gap-3">
                       {currentUser?.photoURL && <img src={currentUser.photoURL} className="w-12 h-12 rounded-full" alt="avatar" />}
@@ -237,8 +240,6 @@ export default function Dashboard() {
                       </div>
                     </div>
                   </div>
-
-                  {/* Plano */}
                   <div className="glass-card p-5 rounded-2xl border border-white/5 mb-4 space-y-3">
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-white/60">Plano atual</span>
@@ -248,7 +249,6 @@ export default function Dashboard() {
                       <Sparkles className="w-4 h-4 text-purple-400" /> Fazer upgrade
                     </button>
                   </div>
-
                   {userProfile?.plan === 'power' && (
                     <div className="glass-card p-5 rounded-2xl border border-white/5 mb-4 space-y-3">
                       <p className="text-sm text-white/60">Sua chave Groq (plano Power)</p>
@@ -259,7 +259,6 @@ export default function Dashboard() {
                       <p className="text-[10px] text-white/20">Obtenha em console.groq.com/keys</p>
                     </div>
                   )}
-
                   <button onClick={handleLogout} className="w-full py-3 rounded-xl border border-red-500/20 text-red-400 hover:bg-red-400/10 transition-colors text-sm flex items-center justify-center gap-2">
                     <LogOut className="w-4 h-4" /> Sair da conta
                   </button>

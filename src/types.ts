@@ -33,10 +33,13 @@ export type MeetingStatus =
 // PLANOS
 // ─────────────────────────────────────────────
 export type SubscriptionPlan =
-  | 'starter'     // free
-  | 'pro'         // R$ 9,99/mês
-  | 'ultra'       // R$ 19,99/mês
-  | 'power';      // R$ 49,99/mês — API própria
+  | 'starter'       // free
+  | 'pro'           // R$ 9,99/mês
+  | 'ultra'         // R$ 19,99/mês
+  | 'power'         // R$ 49,99/mês
+  // legado — mantidos para compatibilidade com dados existentes no Firestore
+  | 'pro_monthly'
+  | 'pro_annual';
 
 export interface PlanConfig {
   id: SubscriptionPlan;
@@ -45,7 +48,6 @@ export interface PlanConfig {
   minutesPerMonth: number | null;
   maxSavedMeetings: number | null;
   features: string[];
-  asaasProductId?: string; // ID do produto/plano no Asaas
 }
 
 export const PLAN_CONFIGS: Record<SubscriptionPlan, PlanConfig> = {
@@ -81,6 +83,23 @@ export const PLAN_CONFIGS: Record<SubscriptionPlan, PlanConfig> = {
     maxSavedMeetings: null,
     features: ['Tudo do Ultra', 'API própria (Groq/OpenAI)', 'Zero custo de IA pra você', 'Prioridade no suporte'],
   },
+  // Legado — mapeados para equivalentes novos
+  pro_monthly: {
+    id: 'pro_monthly',
+    name: 'Pro',
+    priceMonthlyBRL: 9.99,
+    minutesPerMonth: 300,
+    maxSavedMeetings: 30,
+    features: ['300 min/mês', '30 reuniões salvas', 'Resumo por IA', 'Chat IA'],
+  },
+  pro_annual: {
+    id: 'pro_annual',
+    name: 'Ultra',
+    priceMonthlyBRL: 19.99,
+    minutesPerMonth: null,
+    maxSavedMeetings: null,
+    features: ['Áudio ilimitado', 'Reuniões ilimitadas', 'Resumo por IA', 'Chat IA'],
+  },
 };
 
 // ─────────────────────────────────────────────
@@ -98,7 +117,7 @@ export interface UserProfile {
   apiKey?: string | null;
   language: string;
   createdAt: number;
-  asaasCustomerId?: string; // ID do cliente no Asaas
+  asaasCustomerId?: string;
 }
 
 // ─────────────────────────────────────────────
