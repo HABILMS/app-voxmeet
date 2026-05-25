@@ -14,7 +14,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { plan, userId, userEmail, userName } = req.body;
+  const { plan, userId, userEmail, userName, cpf } = req.body;
 
   if (!plan || !userId || !userEmail) {
     return res.status(400).json({ error: 'Dados incompletos.' });
@@ -40,6 +40,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (searchData.data?.length > 0) {
       customerId = searchData.data[0].id;
+      // Atualiza CPF se não tiver
+      if (cpf && !searchData.data[0].cpfCnpj) {
+        await fetch(`${ASAAS_API}/customers/${customerId}`, {
+          method: 'PUT',
+          headers: { access_token: ASAAS_KEY, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cpfCnpj: cpf }),
+        });
+      }
     } else {
       const createRes = await fetch(`${ASAAS_API}/customers`, {
         method: 'POST',
@@ -47,6 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         body: JSON.stringify({
           name: userName || userEmail,
           email: userEmail,
+          cpfCnpj: cpf || '',
           externalReference: userId,
         }),
       });

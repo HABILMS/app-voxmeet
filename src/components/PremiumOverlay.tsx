@@ -41,6 +41,7 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
   const [step, setStep] = useState<Step>('plans');
   const [pixData, setPixData] = useState<PixData | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [cpf, setCpf] = useState('');
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [checkCount, setCheckCount] = useState(0);
@@ -83,6 +84,7 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
           userId: user.uid,
           userEmail: user.email,
           userName: user.displayName,
+          cpf: cpf.replace(/\D/g, ''),
         }),
       });
 
@@ -195,9 +197,27 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
                   );
                 })}
 
+                {/* Campo CPF */}
+                <div className="space-y-1">
+                  <label className="text-xs text-white/40">CPF do pagador</label>
+                  <input
+                    type="text"
+                    value={cpf}
+                    onChange={e => {
+                      const v = e.target.value.replace(/\D/g, '').slice(0, 11);
+                      setCpf(v.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
+                              .replace(/(\d{3})(\d{3})(\d{3})/, '$1.$2.$3')
+                              .replace(/(\d{3})(\d{3})/, '$1.$2')
+                              .replace(/(\d{3})/, '$1'));
+                    }}
+                    placeholder="000.000.000-00"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-white/20 focus:border-blue-500/50 focus:outline-none"
+                  />
+                </div>
+
                 <button
                   onClick={handleGeneratePix}
-                  disabled={!isUpgrade || isLoading}
+                  disabled={!isUpgrade || isLoading || cpf.replace(/\D/g, '').length < 11}
                   className={cn(
                     "w-full py-4 rounded-2xl font-bold text-sm transition-all mt-2 flex items-center justify-center gap-2",
                     isUpgrade && !isLoading ? "bg-white text-black hover:bg-white/90" : "bg-white/5 text-white/20 cursor-not-allowed"
