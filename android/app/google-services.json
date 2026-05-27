@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "334211206950",
+    "project_id": "gen-lang-client-0396410617",
+    "storage_bucket": "gen-lang-client-0396410617.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:334211206950:android:413781c7153c825b037be7",
+        "android_client_info": {
+          "package_name": "com.voxmeet.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "334211206950-s7573nnh19p7oemuanev567ctpv53ujq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.voxmeet.app",
+            "certificate_hash": "46be2e7817c0280ebd10fa664ac8061d95800752"
+          }
+        },
+        {
+          "client_id": "334211206950-in2ojd4vtjtg2eu5pbbsbeje6lnsui2g.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAD7jgKZ1xnoLUz1yGYqGS0te2r3hFhhQA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "334211206950-in2ojd4vtjtg2eu5pbbsbeje6lnsui2g.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

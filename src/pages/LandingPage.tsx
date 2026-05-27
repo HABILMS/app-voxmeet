@@ -1,4 +1,6 @@
 // src/pages/LandingPage.tsx — VoxMeet
+import { useEffect, useState } from 'react';
+import { AuthModal } from '../components/AuthModal';
 import { motion } from 'motion/react';
 import {
   ArrowRight, Mic, CheckCircle2, Sparkles, Brain,
@@ -6,40 +8,30 @@ import {
   Star, Crown, Bitcoin
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { signInWithPopup, signInWithRedirect } from 'firebase/auth';
-import { auth, googleProvider } from '../lib/firebase';
+import { auth } from '../lib/firebase';
 import { PLAN_CONFIGS } from '../types';
+
+// Planos ativos para exibição na landing
+const LANDING_PLANS = [
+  { id: 'starter' as const, icon: <Zap className="w-5 h-5" />, color: 'text-white/40', highlight: false },
+  { id: 'pro' as const, icon: <Star className="w-5 h-5" />, color: 'text-blue-400', highlight: true },
+  { id: 'ultra' as const, icon: <Sparkles className="w-5 h-5" />, color: 'text-purple-400', highlight: false },
+  { id: 'power' as const, icon: <Crown className="w-5 h-5" />, color: 'text-amber-400', highlight: false },
+];
 
 export default function LandingPage() {
   const navigate = useNavigate();
+  const [showAuth, setShowAuth] = useState(false);
 
-  const isMobile = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  // Redireciona se já estiver logado
+  useEffect(() => {
+    if (auth.currentUser) navigate('/app');
+  }, []);
 
-const handleGetStarted = async () => {
-  try {
-    if (auth.currentUser) { navigate("/app"); return; }
-    await signInWithPopup(auth, googleProvider);
-    navigate("/app");
-  } catch (e: any) {
-    console.error(e);
-    if (e?.code === "auth/unauthorized-domain") {
-      alert(`Dominio nao autorizado no Firebase: ${window.location.hostname}`);
-      return;
-    }
-    navigate("/app");
-  }
-};
-
-
-
-
-
-
-
-
-
-
-
+  const handleGetStarted = () => {
+    if (auth.currentUser) { navigate('/app'); return; }
+    setShowAuth(true);
+  };
 
   return (
     <div className="min-h-screen bg-[#050505] text-white overflow-x-hidden font-sans">
@@ -108,7 +100,6 @@ const handleGetStarted = async () => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-
             <div className="col-span-1 md:col-span-2 bg-[#080808] border border-white/5 rounded-[32px] p-8 md:p-12 relative overflow-hidden group hover:border-white/10 transition-all">
               <div className="absolute top-0 right-0 w-64 h-64 bg-blue-500/10 blur-[100px] rounded-full group-hover:bg-blue-500/20 transition-all" />
               <div className="relative z-10">
@@ -171,7 +162,6 @@ const handleGetStarted = async () => {
                 </p>
               </div>
             </div>
-
           </div>
         </div>
       </section>
@@ -181,19 +171,13 @@ const handleGetStarted = async () => {
         <div className="max-w-5xl mx-auto space-y-12">
           <div className="text-center space-y-4">
             <h2 className="text-4xl font-serif italic text-white">Planos simples e transparentes</h2>
-            <p className="text-white/40">
-              🎉 Plano Anual: <strong className="text-white/70">IA ilimitada no 1º ano</strong> — sem custos extras de API
-            </p>
+            <p className="text-white/40">Comece grátis, faça upgrade quando precisar</p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {([
-              { id: 'starter', icon: <Zap className="w-5 h-5" />, color: 'text-white/40' },
-              { id: 'pro_monthly', icon: <Star className="w-5 h-5" />, color: 'text-blue-400', highlight: true },
-              { id: 'pro_annual', icon: <Sparkles className="w-5 h-5" />, color: 'text-purple-400' },
-              { id: 'power', icon: <Crown className="w-5 h-5" />, color: 'text-amber-400' },
-            ] as const).map(({ id, icon, color, highlight }) => {
+            {LANDING_PLANS.map(({ id, icon, color, highlight }) => {
               const p = PLAN_CONFIGS[id];
+              if (!p) return null;
               return (
                 <div
                   key={id}
@@ -212,13 +196,10 @@ const handleGetStarted = async () => {
                   </div>
                   <div>
                     <p className="text-2xl font-bold text-white">
-                      {p.priceMonthlyBRL === 0 ? 'Grátis' :
-                       id === 'pro_annual' ? `R$ ${p.priceMonthlyBRL}` :
-                       `R$ ${p.priceMonthlyBRL}`}
+                      {p.priceMonthlyBRL === 0 ? 'Grátis' : `R$ ${p.priceMonthlyBRL.toFixed(2)}`}
                     </p>
                     <p className="text-xs text-white/30">
-                      {p.priceMonthlyBRL === 0 ? 'para sempre' :
-                       id === 'pro_annual' ? '/ano' : '/mês'}
+                      {p.priceMonthlyBRL === 0 ? 'para sempre' : '/mês'}
                     </p>
                   </div>
                   <ul className="space-y-1.5 flex-1">
@@ -244,14 +225,10 @@ const handleGetStarted = async () => {
             })}
           </div>
 
-          {/* Pagamentos aceitos */}
           <div className="flex flex-wrap items-center justify-center gap-4 pt-4">
             <span className="text-xs text-white/20">Aceitamos:</span>
             <span className="flex items-center gap-1.5 text-xs text-white/30 bg-white/5 px-3 py-1.5 rounded-full border border-white/5">
-              <Shield className="w-3 h-3" /> Cartão de crédito
-            </span>
-            <span className="flex items-center gap-1.5 text-xs text-white/30 bg-white/5 px-3 py-1.5 rounded-full border border-white/5">
-              <Zap className="w-3 h-3 text-green-400" /> Pix (5% off)
+              <Zap className="w-3 h-3 text-green-400" /> Pix
             </span>
             <span className="flex items-center gap-1.5 text-xs text-white/30 bg-white/5 px-3 py-1.5 rounded-full border border-white/5">
               <Bitcoin className="w-3 h-3 text-amber-400" /> USDT (TRC-20 / Polygon / BEP-20)
@@ -299,11 +276,11 @@ const handleGetStarted = async () => {
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="py-8 px-6 border-t border-white/10 text-center text-white/20 text-sm">
         <p>© 2026 VoxMeet. Todos os direitos reservados.</p>
         <p className="mt-1 text-xs text-white/10">Powered by Groq Whisper + LLaMA 70B</p>
       </footer>
+      <AuthModal isOpen={showAuth} onClose={() => setShowAuth(false)} onSuccess={() => navigate('/app')} />
     </div>
   );
 }

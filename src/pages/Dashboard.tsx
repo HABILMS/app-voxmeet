@@ -6,6 +6,7 @@ import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/aut
 import { collection, query, orderBy, onSnapshot, doc, setDoc, deleteDoc, updateDoc, getDoc } from 'firebase/firestore';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
 import { MeetingRecorder } from '../components/MeetingRecorder';
+import { AuthModal } from '../components/AuthModal';
 import { MeetingList } from '../components/MeetingList';
 import { MeetingDetail } from '../components/MeetingDetail';
 import { PremiumOverlay } from '../components/PremiumOverlay';
@@ -23,6 +24,7 @@ export default function Dashboard() {
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [showPremium, setShowPremium] = useState(false);
+  const [showAuth, setShowAuth] = useState(false);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -67,10 +69,7 @@ export default function Dashboard() {
     return () => unsubscribe();
   }, [currentUser]);
 
-  const handleLogin = async () => {
-    try { await signInWithPopup(auth, googleProvider); }
-    catch (e) { console.error('Login error:', e); }
-  };
+  const handleLogin = () => setShowAuth(true);
 
   const handleLogout = () => { signOut(auth); navigate('/'); };
 
@@ -289,6 +288,7 @@ export default function Dashboard() {
         </div>
       </nav>
 
+      <AuthModal isOpen={showAuth} onClose={() => setShowAuth(false)} onSuccess={() => setShowAuth(false)} />
       <PremiumOverlay isOpen={showPremium} onClose={() => setShowPremium(false)} currentPlan={userProfile?.plan ?? 'starter'} />
     </div>
   );
