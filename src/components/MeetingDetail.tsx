@@ -9,7 +9,7 @@ import {
 import { Meeting, UserProfile } from '../types';
 import ReactMarkdown from 'react-markdown';
 import { chatWithTranscript } from '../services/groqService';
-
+import { cn } from '../lib/utils';
 interface MeetingDetailProps {
   meeting: Meeting;
   onBack: () => void;
