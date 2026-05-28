@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft, Download, Sparkles, Trash2, Pencil,
   Loader2, MessageSquare, Brain, X, Send,
-  FileText, CheckCircle2, Copy, Check
+  FileText, CheckCircle2, Copy, Check, Volume2, VolumeX, Square
 } from 'lucide-react';
 import { Meeting, UserProfile } from '../types';
 import ReactMarkdown from 'react-markdown';
@@ -32,6 +32,51 @@ export function MeetingDetail({
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [copied, setCopied] = useState(false);
   const responseEndRef = useRef<HTMLDivElement>(null);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speakingTarget, setSpeakingTarget] = useState<'summary' | 'chat' | null>(null);
+
+  const speak = (text: string, target: 'summary' | 'chat') => {
+    if (!('speechSynthesis' in window)) {
+      alert('Seu browser não suporta leitura em voz alta.');
+      return;
+    }
+    // Se já está falando, para
+    if (isSpeaking) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+      setSpeakingTarget(null);
+      return;
+    }
+    // Remove markdown para leitura mais limpa
+    const cleanText = text
+      .replace(/#{1,6}\s/g, '')
+      .replace(/\*\*/g, '')
+      .replace(/\*/g, '')
+      .replace(/`/g, '')
+      .replace(/\|/g, ', ')
+      .replace(/[-─━]+/g, '')
+      .replace(/
+{2,}/g, '. ')
+      .replace(/
+/g, ' ')
+      .trim();
+
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = lang;
+    utterance.rate = 0.95;
+    utterance.pitch = 1;
+
+    // Tenta usar voz em português se disponível
+    const voices = window.speechSynthesis.getVoices();
+    const ptVoice = voices.find(v => v.lang.startsWith('pt'));
+    if (ptVoice) utterance.voice = ptVoice;
+
+    utterance.onstart = () => { setIsSpeaking(true); setSpeakingTarget(target); };
+    utterance.onend = () => { setIsSpeaking(false); setSpeakingTarget(null); };
+    utterance.onerror = () => { setIsSpeaking(false); setSpeakingTarget(null); };
+
+    window.speechSynthesis.speak(utterance);
+  };
 
   const userApiKey = userProfile?.apiKey ?? null;
   const lang = userProfile?.language ?? 'pt-BR';
@@ -214,9 +259,26 @@ export function MeetingDetail({
             animate={{ opacity: 1, y: 0 }}
             className="glass-card bg-purple-500/5 border-purple-500/10 p-8 space-y-4"
           >
-            <div className="flex items-center gap-2 text-purple-400 mb-4">
-              <Sparkles className="w-5 h-5" />
-              <h3 className="font-bold uppercase tracking-widest text-xs">Resumo Executivo</h3>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2 text-purple-400">
+                <Sparkles className="w-5 h-5" />
+                <h3 className="font-bold uppercase tracking-widest text-xs">Resumo Executivo</h3>
+              </div>
+              <button
+                onClick={() => speak(meeting.summary || '', 'summary')}
+                className={cn(
+                  "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors",
+                  speakingTarget === 'summary'
+                    ? "bg-purple-500/20 text-purple-300"
+                    : "bg-white/5 text-white/40 hover:text-white/70"
+                )}
+                title={speakingTarget === 'summary' ? "Parar leitura" : "Ouvir resumo"}
+              >
+                {speakingTarget === 'summary'
+                  ? <><Square className="w-3 h-3 fill-current" /> Parar</>
+                  : <><Volume2 className="w-3 h-3" /> Ouvir</>
+                }
+              </button>
             </div>
             <div className="prose prose-invert max-w-none prose-p:text-white/70 prose-headings:text-white">
               <ReactMarkdown>{meeting.summary}</ReactMarkdown>
