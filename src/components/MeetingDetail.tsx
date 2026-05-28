@@ -54,11 +54,9 @@ export function MeetingDetail({
       .replace(/\*/g, '')
       .replace(/`/g, '')
       .replace(/\|/g, ', ')
-      .replace(/[-─━]+/g, '')
-      .replace(/
-{2,}/g, '. ')
-      .replace(/
-/g, ' ')
+      .replace(/[-]+/g, '')
+      .replace(/\n{2,}/g, '. ')
+      .replace(/\n/g, ' ')
       .trim();
 
     const utterance = new SpeechSynthesisUtterance(cleanText);
