@@ -21,7 +21,7 @@ const LANGUAGES = [
 ];
 
 interface MeetingRecorderProps {
-  onSave: (segments: TranscriptSegment[], source: MeetingSource, audioBlob?: Blob | null) => void;
+  onSave: (segments: TranscriptSegment[], segmentsClean: TranscriptSegment[], source: MeetingSource, audioBlob?: Blob | null) => void;
   userProfile?: UserProfile | null;
 }
 
@@ -30,9 +30,11 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
   const userApiKey = userProfile?.apiKey ?? null;
 
   const {
-    isRecording, isTranscribing, segments, setSegments,
+    isRecording, isTranscribing, transcribeProgress,
+    segments, setSegments,
+    segmentsClean, setSegmentsClean,
     interimText, audioBlob, startRecording, stopRecording,
-    captureMode, setCaptureMode, error, setError,
+    captureMode, setCaptureMode, error, setError, isMobileDevice,
   } = useTranscription(lang, userApiKey);
 
   const [isProcessingAI, setIsProcessingAI] = useState(false);
@@ -91,7 +93,8 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
         }
       );
       setError(null);
-      setSegments(result);
+      setSegments(result.raw);
+      setSegmentsClean(result.clean);
     } catch (err: any) {
       setError(err.message || 'Erro ao transcrever arquivo.');
     } finally {
@@ -142,7 +145,7 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
 
   const handleSave = () => {
     const source: MeetingSource = captureMode === 'system' ? 'system' : 'mic';
-    onSave(segments, source, audioBlob);
+    onSave(segments, segmentsClean, source, audioBlob);
   };
 
   const isProcessing = isTranscribing || uploadLoading || isProcessingAI;
@@ -267,7 +270,11 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
           <div className="h-full flex flex-col items-center justify-center text-white/50 space-y-4">
             <Loader2 className="w-12 h-12 animate-spin text-blue-400" />
             <p className="text-lg font-medium animate-pulse">
-              {isTranscribing || uploadLoading ? 'Transcrevendo com Groq Whisper...' : 'Processando com IA...'}
+              {isTranscribing && transcribeProgress
+              ? `Transcrevendo parte ${transcribeProgress.current} de ${transcribeProgress.total}...`
+              : isTranscribing || uploadLoading
+              ? 'Transcrevendo com Groq Whisper...'
+              : 'Processando com IA...'}
             </p>
           </div>
         )}

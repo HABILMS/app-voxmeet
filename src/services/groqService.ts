@@ -4,8 +4,7 @@
 import { TranscriptSegment } from '../types';
 
 const GROQ_API = 'https://api.groq.com/openai/v1';
-const MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB por chunk // 20MB por chunk (limite Groq é 25MB)
-const MAX_CHUNK_DURATION = 10 * 60; // 10 minutos por chunk em segundos
+const MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB por chunk
 
 function resolveApiKey(userApiKey?: string | null): string {
   if (userApiKey?.trim()) return userApiKey.trim();
@@ -14,30 +13,107 @@ function resolveApiKey(userApiKey?: string | null): string {
   return key;
 }
 
-// Divide blob grande em chunks de no máximo MAX_CHUNK_SIZE
+// ─────────────────────────────────────────────
+// LIMPEZA INTELIGENTE DE TRANSCRIÇÃO (Opção C)
+// Remove ruídos, hesitações e fragmentos
+// mantendo o conteúdo semântico completo
+// ─────────────────────────────────────────────
+export function cleanTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
+  const NOISE = new Set([
+    'o', 'a', 'e', 'é', 'é...', 'é.', 'ah', 'ah.', 'ah,', 'ah...', 'ahn',
+    'hm', 'hm...', 'hmm', 'uh', 'eh', 'ih', 'oh',
+    'tá', 'tá.', 'tá,', 'ok', 'ok.', 'sim', 'não',
+    'entendeu?', 'né?', 'né', 'né.', 'né,',
+    'então', 'então.', 'então,', 'então...', 'aí', 'aí.',
+  ]);
+
+  const cleaned: TranscriptSegment[] = [];
+  let buffer = '';
+  let bufferTimestamp = 0;
+  let bufferId = '';
+
+  for (const seg of segments) {
+    const text = seg.text.trim();
+
+    // Ignora segmentos de ruído puro
+    if (!text || text.length <= 1) continue;
+    if (NOISE.has(text.toLowerCase())) continue;
+
+    // Ignora segmentos que são só vogais/pontuação (artefatos do Whisper)
+    if (/^[oaeiouáéíóúàãõâêîôûäëïöü\s,\.!\?]+$/i.test(text) && text.length < 4) continue;
+
+    // Acumula fragmentos curtos com o próximo
+    if (text.length < 25 && !text.match(/[.!?]$/)) {
+      if (!buffer) {
+        buffer = text;
+        bufferTimestamp = seg.timestamp;
+        bufferId = seg.id;
+      } else {
+        buffer += ' ' + text;
+      }
+    } else {
+      // Flush do buffer acumulado
+      if (buffer) {
+        const fullText = buffer + ' ' + text;
+        cleaned.push({
+          id: bufferId,
+          text: fullText.trim(),
+          timestamp: bufferTimestamp,
+          speaker: seg.speaker,
+        });
+        buffer = '';
+      } else {
+        cleaned.push(seg);
+      }
+    }
+  }
+
+  // Flush final do buffer
+  if (buffer) {
+    cleaned.push({
+      id: bufferId,
+      text: buffer.trim(),
+      timestamp: bufferTimestamp,
+    });
+  }
+
+  return cleaned;
+}
+
+// Converte segments para texto truncado para o Groq
+function buildTextForAI(segments: TranscriptSegment[], maxChars = 28000): string {
+  const text = segments.map(s => s.text).join('\n');
+  if (text.length <= maxChars) return text;
+  const half = Math.floor(maxChars / 2);
+  return (
+    text.slice(0, half) +
+    '\n\n[... trecho intermediário omitido ...]\n\n' +
+    text.slice(-half)
+  );
+}
+
+// ─────────────────────────────────────────────
+// DIVISÃO EM CHUNKS
+// ─────────────────────────────────────────────
 async function splitAudioIntoChunks(blob: Blob): Promise<Blob[]> {
   if (blob.size <= MAX_CHUNK_SIZE) return [blob];
-
   const chunks: Blob[] = [];
   let offset = 0;
-
   while (offset < blob.size) {
     const end = Math.min(offset + MAX_CHUNK_SIZE, blob.size);
     chunks.push(blob.slice(offset, end, blob.type));
     offset = end;
   }
-
   console.log(`Áudio dividido em ${chunks.length} chunks de ~${Math.round(MAX_CHUNK_SIZE / 1024 / 1024)}MB`);
   return chunks;
 }
 
-// Transcreve um único chunk
+// ─────────────────────────────────────────────
+// TRANSCRIÇÃO — Groq Whisper
+// ─────────────────────────────────────────────
 async function transcribeChunk(
-  chunk: Blob,
-  lang: string,
-  apiKey: string,
-  chunkIndex: number,
-  baseTimestamp: number
+  chunk: Blob, lang: string, apiKey: string,
+  chunkIndex: number, baseTimestamp: number
 ): Promise<TranscriptSegment[]> {
   const ext = chunk.type.includes('mp4') ? 'mp4'
     : chunk.type.includes('ogg') ? 'ogg'
@@ -71,7 +147,6 @@ async function transcribeChunk(
       id: `seg_${chunkIndex}_${i}_${Math.random().toString(36).substr(2, 6)}`,
       text: seg.text.trim(),
       timestamp: baseTimestamp + Math.round(seg.start * 1000),
-      speaker: undefined,
     }));
   }
 
@@ -82,15 +157,12 @@ async function transcribeChunk(
   }];
 }
 
-// ─────────────────────────────────────────────
-// TRANSCRIÇÃO PRINCIPAL — com suporte a áudios longos
-// ─────────────────────────────────────────────
 export async function transcribeAudio(
   audioBlob: Blob,
   lang: string = 'pt',
   userApiKey?: string | null,
   onProgress?: (current: number, total: number) => void
-): Promise<TranscriptSegment[]> {
+): Promise<{ raw: TranscriptSegment[]; clean: TranscriptSegment[] }> {
   const apiKey = resolveApiKey(userApiKey);
   const langCode = lang.split('-')[0];
 
@@ -98,32 +170,26 @@ export async function transcribeAudio(
 
   const chunks = await splitAudioIntoChunks(audioBlob);
   const allSegments: TranscriptSegment[] = [];
-
-  // Estima duração por chunk baseado no tamanho proporcional
   const totalSize = audioBlob.size;
 
   for (let i = 0; i < chunks.length; i++) {
     onProgress?.(i + 1, chunks.length);
-    console.log(`Transcrevendo chunk ${i + 1}/${chunks.length}...`);
-
-    // Estima timestamp base para este chunk
     const chunkStartRatio = chunks.slice(0, i).reduce((acc, c) => acc + c.size, 0) / totalSize;
-    const baseTimestamp = Date.now() + Math.round(chunkStartRatio * MAX_CHUNK_DURATION * 1000 * chunks.length);
-
+    const baseTimestamp = Date.now() + Math.round(chunkStartRatio * 600 * 1000);
     const segments = await transcribeChunk(chunks[i], langCode, apiKey, i, baseTimestamp);
     allSegments.push(...segments);
-
-    // Pequena pausa entre chunks para não sobrecarregar a API
-    if (i < chunks.length - 1) {
-      await new Promise(r => setTimeout(r, 500));
-    }
+    if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 500));
   }
 
-  return allSegments;
+  // Retorna crua E otimizada
+  return {
+    raw: allSegments,
+    clean: cleanTranscriptSegments(allSegments),
+  };
 }
 
 // ─────────────────────────────────────────────
-// RESUMO + ACTION ITEMS
+// RESUMO + ACTION ITEMS — usa transcrição limpa
 // ─────────────────────────────────────────────
 export async function summarizeMeeting(
   transcript: TranscriptSegment[],
@@ -131,7 +197,10 @@ export async function summarizeMeeting(
   userApiKey?: string | null
 ): Promise<{ summary: string; actionItems: string[] } | undefined> {
   const apiKey = resolveApiKey(userApiKey);
-  const fullText = transcript.map(s => s.text).join('\n');
+
+  // Usa clean se disponível, senão limpa na hora
+  const cleanSegments = cleanTranscriptSegments(transcript);
+  const fullText = buildTextForAI(cleanSegments);
   if (!fullText.trim()) return undefined;
 
   const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
@@ -172,7 +241,7 @@ export async function summarizeMeeting(
 }
 
 // ─────────────────────────────────────────────
-// CHAT COM A TRANSCRIÇÃO
+// CHAT — usa transcrição limpa
 // ─────────────────────────────────────────────
 export async function chatWithTranscript(
   transcript: TranscriptSegment[],
@@ -181,7 +250,8 @@ export async function chatWithTranscript(
   userApiKey?: string | null
 ): Promise<string> {
   const apiKey = resolveApiKey(userApiKey);
-  const fullText = transcript.map(s => s.text).join('\n');
+  const cleanSegments = cleanTranscriptSegments(transcript);
+  const fullText = buildTextForAI(cleanSegments);
   const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
 
   const res = await fetch(`${GROQ_API}/chat/completions`, {
@@ -208,7 +278,7 @@ export async function chatWithTranscript(
 }
 
 // ─────────────────────────────────────────────
-// VALIDAR CHAVE DO CLIENTE
+// VALIDAR CHAVE
 // ─────────────────────────────────────────────
 export async function validateApiKey(apiKey: string): Promise<boolean> {
   try {

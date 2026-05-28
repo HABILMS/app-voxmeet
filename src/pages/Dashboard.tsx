@@ -11,7 +11,7 @@ import { MeetingList } from '../components/MeetingList';
 import { MeetingDetail } from '../components/MeetingDetail';
 import { PremiumOverlay } from '../components/PremiumOverlay';
 import { FAQView } from '../components/FAQView';
-import { Meeting, TranscriptSegment, MeetingSource, UserProfile, SubscriptionPlan, PLAN_CONFIGS } from '../types';
+import { Meeting, TranscriptSegment, MeetingSource, UserProfile, SubscriptionPlan, PLAN_CONFIGS, calcExpiresAt } from '../types';
 import { summarizeMeeting } from '../services/groqService';
 import { cn } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
@@ -88,6 +88,11 @@ export default function Dashboard() {
       source: source ?? 'mic',
       status: 'done',
       userId: currentUser.uid,
+      transcriptClean: segmentsClean.map(s => ({
+        id: s.id, text: s.text, timestamp: s.timestamp,
+        ...(s.speaker ? { speaker: s.speaker } : {}),
+      })),
+      expiresAt: calcExpiresAt(userProfile?.plan ?? 'starter', Date.now()) ?? null,
     };
     try {
       await setDoc(doc(db, path), newMeeting);

@@ -9,7 +9,8 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [transcribeProgress, setTranscribeProgress] = useState<{ current: number; total: number } | null>(null);
-  const [segments, setSegments] = useState<TranscriptSegment[]>([]);
+  const [segments, setSegments] = useState<TranscriptSegment[]>([]);         // crua
+  const [segmentsClean, setSegmentsClean] = useState<TranscriptSegment[]>([]); // otimizada
   const [interimText, setInterimText] = useState('');
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [captureMode, setCaptureMode] = useState<'mic' | 'system'>('mic');
@@ -21,17 +22,14 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   const streamRef = useRef<MediaStream | null>(null);
   const isRecordingRef = useRef(false);
 
-  // Web Speech API — feedback em tempo real
   useEffect(() => {
     // @ts-ignore
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) return;
-
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = lang;
-
     recognition.onresult = (event: any) => {
       let interim = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -39,39 +37,32 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       }
       setInterimText(interim);
     };
-
     recognition.onerror = (event: any) => {
-      if (event.error === 'not-allowed') {
-        setError('Acesso ao microfone negado.');
-        setIsRecording(false);
-      }
+      if (event.error === 'not-allowed') { setError('Acesso ao microfone negado.'); setIsRecording(false); }
     };
-
     recognition.onend = () => {
-      if (isRecordingRef.current) {
-        try { recognition.start(); } catch (e) {}
-      }
+      if (isRecordingRef.current) { try { recognition.start(); } catch (e) {} }
     };
-
     recognitionRef.current = recognition;
     return () => { try { recognitionRef.current?.stop(); } catch (e) {} };
   }, [lang]);
 
   const startRecording = useCallback(async () => {
+    setError(null);
+    setSegments([]);
+    setSegmentsClean([]);
+    setInterimText('');
+    setAudioBlob(null);
+
     try {
       let stream: MediaStream;
       const mobile = isMobileDevice();
 
       if (captureMode === 'system' && !mobile) {
-        // getDisplayMedia DEVE ser a primeira chamada — Chrome exige gesto direto do usuario
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        });
-
-        // So depois do getDisplayMedia fazemos reset dos estados
+        const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
         setError(null);
         setSegments([]);
+        setSegmentsClean([]);
         setInterimText('');
         setAudioBlob(null);
 
@@ -79,46 +70,25 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
           screenStream.getTracks().forEach(t => t.stop());
           throw new Error('Nenhuma trilha de áudio capturada. Marque "Compartilhar áudio" ao selecionar a janela.');
         }
-
-        // Usa o stream direto sem AudioContext — gera arquivo mais compatível com Groq
         stream = new MediaStream(screenStream.getAudioTracks());
       } else {
-        // Modo mic — reset antes de pedir permissao
-        setError(null);
-        setSegments([]);
-        setInterimText('');
-        setAudioBlob(null);
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       }
 
       streamRef.current = stream;
 
-      // webm/opus é o formato mais compatível com Groq Whisper
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : MediaRecorder.isTypeSupported("audio/webm")
-        ? "audio/webm"
-        : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
-        ? "audio/ogg;codecs=opus"
-        : "audio/mp4";
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+        ? 'audio/webm'
+        : MediaRecorder.isTypeSupported('audio/ogg;codecs=opus')
+        ? 'audio/ogg;codecs=opus'
+        : 'audio/mp4';
 
-
-
-
-
-
-
-      // 32kbps = qualidade suficiente para voz, ~14MB/hora vs ~150MB/hora no padrao
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType,
-        audioBitsPerSecond: 32000,
-      });
+      const mediaRecorder = new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32000 });
       audioChunksRef.current = [];
 
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data.size > 0) audioChunksRef.current.push(e.data);
-      };
-
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
       mediaRecorder.onstop = async () => {
         const blob = new Blob(audioChunksRef.current, { type: mimeType });
         setAudioBlob(blob);
@@ -129,7 +99,6 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       mediaRecorder.start(1000);
       isRecordingRef.current = true;
       setIsRecording(true);
-
       try { recognitionRef.current?.start(); } catch (e) {}
 
     } catch (err: any) {
@@ -154,18 +123,16 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
     setIsTranscribing(true);
     setTranscribeProgress(null);
     setSegments([]);
+    setSegmentsClean([]);
     try {
-      const sizeMB = (blob.size / 1024 / 1024).toFixed(1);
-      console.log(`Iniciando transcrição: ${sizeMB}MB`);
       const result = await transcribeAudio(
-        blob,
-        lang.split('-')[0],
-        userApiKey,
+        blob, lang.split('-')[0], userApiKey,
         (current, total) => setTranscribeProgress({ current, total })
       );
-      setSegments(result);
+      setSegments(result.raw);
+      setSegmentsClean(result.clean);
+      console.log(`Transcrição: ${result.raw.length} segmentos → ${result.clean.length} otimizados`);
     } catch (err: any) {
-      console.error('Erro na transcrição Groq:', err);
       setError(err.message || 'Erro ao transcrever áudio.');
     } finally {
       setIsTranscribing(false);
@@ -179,20 +146,13 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   }, [audioBlob, userApiKey, lang]);
 
   return {
-    isRecording,
-    isTranscribing,
-    transcribeProgress,
-    segments,
-    setSegments,
-    interimText,
-    audioBlob,
-    startRecording,
-    stopRecording,
-    retranscribe,
-    captureMode,
-    setCaptureMode,
+    isRecording, isTranscribing, transcribeProgress,
+    segments, setSegments,
+    segmentsClean, setSegmentsClean,
+    interimText, audioBlob,
+    startRecording, stopRecording, retranscribe,
+    captureMode, setCaptureMode,
     isMobileDevice: isMobileDevice(),
-    error,
-    setError,
+    error, setError,
   };
 }

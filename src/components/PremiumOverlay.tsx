@@ -1,7 +1,7 @@
 // src/components/PremiumOverlay.tsx — VoxMeet
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Check, Zap, Star, Crown, Sparkles, QrCode, Copy, CheckCircle2, Loader2, RefreshCw } from 'lucide-react';
+import { X, Check, Zap, Star, Crown, Sparkles, QrCode, Copy, CheckCircle2, Loader2, RefreshCw, AlertCircle } from 'lucide-react';
 import { PLAN_CONFIGS, SubscriptionPlan } from '../types';
 import { cn } from '../lib/utils';
 import { auth } from '../lib/firebase';
@@ -12,14 +12,17 @@ interface PremiumOverlayProps {
   currentPlan?: SubscriptionPlan;
 }
 
-const PLAN_ICONS: Record<SubscriptionPlan, React.ReactNode> = {
+// Apenas os planos ativos — sem legados
+const ACTIVE_PLANS: SubscriptionPlan[] = ['starter', 'pro', 'ultra', 'power'];
+
+const PLAN_ICONS: Record<string, React.ReactNode> = {
   starter: <Zap className="w-5 h-5" />,
   pro: <Star className="w-5 h-5" />,
   ultra: <Sparkles className="w-5 h-5" />,
   power: <Crown className="w-5 h-5" />,
 };
 
-const PLAN_COLORS: Record<SubscriptionPlan, string> = {
+const PLAN_COLORS: Record<string, string> = {
   starter: 'text-white/40',
   pro: 'text-blue-400',
   ultra: 'text-purple-400',
@@ -47,10 +50,13 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
   const [checkCount, setCheckCount] = useState(0);
   const checkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const plan = PLAN_CONFIGS[selectedPlan];
-  const isUpgrade = selectedPlan !== 'starter' && selectedPlan !== currentPlan;
+  // Normaliza plano legado para exibição
+  const normalizedCurrentPlan = (currentPlan === 'pro_monthly' ? 'pro' :
+    currentPlan === 'pro_annual' ? 'ultra' : currentPlan) as SubscriptionPlan;
 
-  // Verifica pagamento a cada 5s após gerar Pix
+  const plan = PLAN_CONFIGS[selectedPlan] ?? PLAN_CONFIGS['pro'];
+  const isUpgrade = selectedPlan !== 'starter' && selectedPlan !== normalizedCurrentPlan;
+
   useEffect(() => {
     if (step === 'pix' && pixData) {
       checkIntervalRef.current = setInterval(async () => {
@@ -68,13 +74,23 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
     return () => { if (checkIntervalRef.current) clearInterval(checkIntervalRef.current); };
   }, [step, pixData]);
 
+  const formatCpf = (value: string) => {
+    const digits = value.replace(/\D/g, '').slice(0, 11);
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `${digits.slice(0,3)}.${digits.slice(3)}`;
+    if (digits.length <= 9) return `${digits.slice(0,3)}.${digits.slice(3,6)}.${digits.slice(6)}`;
+    return `${digits.slice(0,3)}.${digits.slice(3,6)}.${digits.slice(6,9)}-${digits.slice(9)}`;
+  };
+
   const handleGeneratePix = async () => {
     const user = auth.currentUser;
     if (!user) { setError('Faça login primeiro.'); return; }
 
+    const cpfDigits = cpf.replace(/\D/g, '');
+    if (cpfDigits.length < 11) { setError('Preencha o CPF completo.'); return; }
+
     setIsLoading(true);
     setError(null);
-
     try {
       const res = await fetch('/api/checkout', {
         method: 'POST',
@@ -84,13 +100,11 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
           userId: user.uid,
           userEmail: user.email,
           userName: user.displayName,
-          cpf: cpf.replace(/\D/g, ''),
+          cpf: cpfDigits,
         }),
       });
-
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Erro ao gerar Pix');
-
       setPixData(data);
       setStep('pix');
     } catch (err: any) {
@@ -112,6 +126,7 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
     setStep('plans');
     setPixData(null);
     setError(null);
+    setCpf('');
     onClose();
   };
 
@@ -140,7 +155,9 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
                   {step === 'plans' ? 'Escolha seu plano' : step === 'pix' ? 'Pagar com Pix' : 'Pagamento confirmado!'}
                 </h2>
                 <p className="text-xs text-white/30 mt-0.5">
-                  {step === 'plans' ? 'Cancele quando quiser' : step === 'pix' ? `${plan.name} · R$ ${plan.priceMonthlyBRL.toFixed(2)}/mês` : 'Seu plano foi ativado'}
+                  {step === 'plans' ? 'Cancele quando quiser' :
+                   step === 'pix' ? `${plan.name} · R$ ${plan.priceMonthlyBRL.toFixed(2)}/mês` :
+                   'Seu plano foi ativado'}
                 </p>
               </div>
               <button onClick={handleClose} className="p-2 hover:bg-white/5 rounded-full text-white/40">
@@ -152,15 +169,18 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
             {step === 'plans' && (
               <div className="p-5 space-y-3">
                 {error && (
-                  <div className="px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-300">
+                  <div className="px-4 py-3 bg-red-500/10 border border-red-500/20 rounded-xl text-sm text-red-300 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
                     {error}
                   </div>
                 )}
 
-                {(Object.keys(PLAN_CONFIGS) as SubscriptionPlan[]).map((planId) => {
+                {/* Só mostra planos ativos */}
+                {ACTIVE_PLANS.map((planId) => {
                   const p = PLAN_CONFIGS[planId];
+                  if (!p) return null;
                   const isSelected = selectedPlan === planId;
-                  const isCurrent = currentPlan === planId;
+                  const isCurrent = normalizedCurrentPlan === planId;
 
                   return (
                     <button
@@ -175,16 +195,14 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <span className={PLAN_COLORS[planId]}>{PLAN_ICONS[planId]}</span>
+                          <span className={PLAN_COLORS[planId] ?? 'text-white/40'}>{PLAN_ICONS[planId]}</span>
                           <span className="font-bold text-white text-sm">{p.name}</span>
                           {isCurrent && <span className="text-[10px] px-2 py-0.5 rounded-full bg-white/10 text-white/40">atual</span>}
                           {planId === 'pro' && <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300">mais popular</span>}
                         </div>
-                        <div className="text-right">
-                          <p className="text-white font-bold text-sm">
-                            {p.priceMonthlyBRL === 0 ? 'Grátis' : `R$ ${p.priceMonthlyBRL.toFixed(2)}/mês`}
-                          </p>
-                        </div>
+                        <p className="text-white font-bold text-sm">
+                          {p.priceMonthlyBRL === 0 ? 'Grátis' : `R$ ${p.priceMonthlyBRL.toFixed(2)}/mês`}
+                        </p>
                       </div>
                       <ul className="space-y-1">
                         {p.features.map(f => (
@@ -197,30 +215,31 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
                   );
                 })}
 
-                {/* Campo CPF */}
-                <div className="space-y-1">
-                  <label className="text-xs text-white/40">CPF do pagador</label>
-                  <input
-                    type="text"
-                    value={cpf}
-                    onChange={e => {
-                      const v = e.target.value.replace(/\D/g, '').slice(0, 11);
-                      setCpf(v.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4')
-                              .replace(/(\d{3})(\d{3})(\d{3})/, '$1.$2.$3')
-                              .replace(/(\d{3})(\d{3})/, '$1.$2')
-                              .replace(/(\d{3})/, '$1'));
-                    }}
-                    placeholder="000.000.000-00"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-white/20 focus:border-blue-500/50 focus:outline-none"
-                  />
-                </div>
+                {/* CPF */}
+                {selectedPlan !== 'starter' && (
+                  <div className="space-y-1 pt-2">
+                    <label className="text-xs text-white/40 flex items-center gap-1">
+                      <AlertCircle className="w-3 h-3" />
+                      CPF do pagador (obrigatório)
+                    </label>
+                    <input
+                      type="text"
+                      value={cpf}
+                      onChange={e => setCpf(formatCpf(e.target.value))}
+                      placeholder="000.000.000-00"
+                      className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder:text-white/20 focus:border-blue-500/50 focus:outline-none"
+                    />
+                  </div>
+                )}
 
                 <button
                   onClick={handleGeneratePix}
                   disabled={!isUpgrade || isLoading || cpf.replace(/\D/g, '').length < 11}
                   className={cn(
-                    "w-full py-4 rounded-2xl font-bold text-sm transition-all mt-2 flex items-center justify-center gap-2",
-                    isUpgrade && !isLoading ? "bg-white text-black hover:bg-white/90" : "bg-white/5 text-white/20 cursor-not-allowed"
+                    "w-full py-4 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2",
+                    isUpgrade && !isLoading && cpf.replace(/\D/g, '').length >= 11
+                      ? "bg-white text-black hover:bg-white/90"
+                      : "bg-white/5 text-white/20 cursor-not-allowed"
                   )}
                 >
                   {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
@@ -234,48 +253,35 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
             {/* Step: Pix */}
             {step === 'pix' && pixData && (
               <div className="p-5 space-y-4">
-                <div className="text-center space-y-2">
+                <div className="text-center space-y-1">
                   <p className="text-sm text-white/60">Escaneie o QR Code ou copie o código Pix</p>
                   <p className="text-2xl font-bold text-white">R$ {pixData.value.toFixed(2)}</p>
                 </div>
 
-                {/* QR Code */}
                 {pixData.pixQrCode && (
                   <div className="flex justify-center">
                     <div className="bg-white p-4 rounded-2xl">
-                      <img
-                        src={`data:image/png;base64,${pixData.pixQrCode}`}
-                        alt="QR Code Pix"
-                        className="w-48 h-48"
-                      />
+                      <img src={`data:image/png;base64,${pixData.pixQrCode}`} alt="QR Code Pix" className="w-48 h-48" />
                     </div>
                   </div>
                 )}
 
-                {/* Código Pix copia e cola */}
                 <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
                   <p className="text-[10px] text-white/30 uppercase tracking-widest mb-2">Pix copia e cola</p>
                   <p className="text-xs text-white/60 break-all font-mono leading-relaxed">
                     {pixData.pixCode?.substring(0, 60)}...
                   </p>
-                  <button
-                    onClick={copyPix}
-                    className="mt-3 w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-sm text-white/70 hover:text-white transition-colors flex items-center justify-center gap-2"
-                  >
+                  <button onClick={copyPix} className="mt-3 w-full py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-sm text-white/70 hover:text-white transition-colors flex items-center justify-center gap-2">
                     {copied ? <CheckCircle2 className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
                     {copied ? 'Copiado!' : 'Copiar código Pix'}
                   </button>
                 </div>
 
-                {/* Status verificação */}
                 <div className="flex items-center justify-center gap-2 text-sm text-white/30">
                   <RefreshCw className="w-4 h-4 animate-spin" />
                   Aguardando pagamento... ({checkCount} verificações)
                 </div>
-
-                <p className="text-[10px] text-white/20 text-center">
-                  O plano é ativado automaticamente após confirmação do Pix
-                </p>
+                <p className="text-[10px] text-white/20 text-center">O plano é ativado automaticamente após confirmação do Pix</p>
               </div>
             )}
 
@@ -289,13 +295,9 @@ export function PremiumOverlay({ isOpen, onClose, currentPlan = 'starter' }: Pre
                   <h3 className="text-xl font-bold text-white mb-2">Plano ativado!</h3>
                   <p className="text-sm text-white/50">
                     Seu plano <strong className="text-white">{plan.name}</strong> foi ativado com sucesso.
-                    Recarregue a página para ver as novas funcionalidades.
                   </p>
                 </div>
-                <button
-                  onClick={() => window.location.reload()}
-                  className="w-full py-3 rounded-2xl bg-white text-black font-bold text-sm hover:bg-white/90 transition-colors"
-                >
+                <button onClick={() => window.location.reload()} className="w-full py-3 rounded-2xl bg-white text-black font-bold text-sm hover:bg-white/90 transition-colors">
                   Recarregar app
                 </button>
               </div>
