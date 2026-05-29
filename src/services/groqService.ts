@@ -5,7 +5,7 @@ import { TranscriptSegment } from '../types';
 
 const GROQ_API = 'https://api.groq.com/openai/v1';
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models';
-const GEMINI_MODEL = 'gemini-1.5-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash';
 const MAX_CHUNK_SIZE = 24 * 1024 * 1024;
 
 function resolveGeminiKey(): string {
