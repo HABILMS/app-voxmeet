@@ -5,6 +5,55 @@ import { transcribeAudio } from '../services/groqService';
 
 const isMobileDevice = () => /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
+// ─────────────────────────────────────────────
+// IndexedDB — salva áudio localmente como backup
+// ─────────────────────────────────────────────
+const DB_NAME = 'voxmeet_audio_backup';
+const DB_VERSION = 1;
+const STORE_NAME = 'recordings';
+
+async function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore(STORE_NAME, { keyPath: 'id' });
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function saveAudioBackup(blob: Blob, mimeType: string): Promise<string> {
+  const db = await openDB();
+  const id = `rec_${Date.now()}`;
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).put({ id, blob, mimeType, savedAt: Date.now() });
+    tx.oncomplete = () => resolve(id);
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+export async function getAudioBackups(): Promise<{ id: string; blob: Blob; mimeType: string; savedAt: number }[]> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).getAll();
+    req.onsuccess = () => resolve(req.result || []);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function deleteAudioBackup(id: string): Promise<void> {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    tx.objectStore(STORE_NAME).delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
 export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | null) {
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
@@ -96,6 +145,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       };
 
       mediaRecorderRef.current = mediaRecorder;
+      (window as any).__voxmeetMediaRecorder = mediaRecorder; // exposto para pausa
       mediaRecorder.start(1000);
       isRecordingRef.current = true;
       setIsRecording(true);
@@ -112,6 +162,7 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
   const stopRecording = useCallback(() => {
     isRecordingRef.current = false;
     setIsRecording(false);
+    (window as any).__voxmeetMediaRecorder = null;
     setInterimText('');
     if (mediaRecorderRef.current?.state !== 'inactive') mediaRecorderRef.current?.stop();
     streamRef.current?.getTracks().forEach(t => t.stop());
@@ -124,6 +175,16 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
     setTranscribeProgress(null);
     setSegments([]);
     setSegmentsClean([]);
+
+    // Salva backup antes de tentar transcrever
+    let backupId: string | null = null;
+    try {
+      backupId = await saveAudioBackup(blob, blob.type);
+      console.log('Backup de áudio salvo:', backupId);
+    } catch (e) {
+      console.warn('Falha ao salvar backup (IndexedDB):', e);
+    }
+
     try {
       const result = await transcribeAudio(
         blob, lang.split('-')[0], userApiKey,
@@ -132,8 +193,10 @@ export function useTranscription(lang: string = 'pt-BR', userApiKey?: string | n
       setSegments(result.raw);
       setSegmentsClean(result.clean);
       console.log(`Transcrição: ${result.raw.length} segmentos → ${result.clean.length} otimizados`);
+      // Remove backup após transcrição bem-sucedida
+      if (backupId) await deleteAudioBackup(backupId).catch(() => {});
     } catch (err: any) {
-      setError(err.message || 'Erro ao transcrever áudio.');
+      setError(err.message || 'Erro ao transcrever áudio. O áudio foi salvo — clique em Recuperar para tentar novamente.');
     } finally {
       setIsTranscribing(false);
       setTranscribeProgress(null);

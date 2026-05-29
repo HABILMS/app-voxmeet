@@ -4,7 +4,35 @@
 import { TranscriptSegment } from '../types';
 
 const GROQ_API = 'https://api.groq.com/openai/v1';
-const MAX_CHUNK_SIZE = 10 * 1024 * 1024; // 10MB por chunk
+const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const MAX_CHUNK_SIZE = 24 * 1024 * 1024;
+
+function resolveGeminiKey(): string {
+  const key = import.meta.env.VITE_GEMINI_API_KEY;
+  if (!key) throw new Error('Chave Gemini não configurada. Adicione VITE_GEMINI_API_KEY no .env.local');
+  return key;
+}
+
+// Chamada genérica ao Gemini
+async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
+  const key = resolveGeminiKey();
+  const res = await fetch(`${GEMINI_API}/${GEMINI_MODEL}:generateContent?key=${key}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      system_instruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+      generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
+    }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err?.error?.message || `Erro Gemini: ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+} // 24MB — cobre até ~1h40min a 32kbps
 
 function resolveApiKey(userApiKey?: string | null): string {
   if (userApiKey?.trim()) return userApiKey.trim();
@@ -81,7 +109,7 @@ export function cleanTranscriptSegments(segments: TranscriptSegment[]): Transcri
 }
 
 // Converte segments para texto truncado para o Groq
-function buildTextForAI(segments: TranscriptSegment[], maxChars = 28000): string {
+function buildTextForAI(segments: TranscriptSegment[], maxChars = 18000): string {
   const text = segments.map(s => s.text).join('\n');
   if (text.length <= maxChars) return text;
   const half = Math.floor(maxChars / 2);
@@ -196,47 +224,28 @@ export async function summarizeMeeting(
   lang: string = 'pt-BR',
   userApiKey?: string | null
 ): Promise<{ summary: string; actionItems: string[] } | undefined> {
-  const apiKey = resolveApiKey(userApiKey);
-
-  // Usa clean se disponível, senão limpa na hora
   const cleanSegments = cleanTranscriptSegments(transcript);
-  const fullText = buildTextForAI(cleanSegments);
+  // Gemini tem 1M tokens — sem truncamento necessário
+  const fullText = cleanSegments.map(s => s.text).join('\n');
   if (!fullText.trim()) return undefined;
 
   const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
 
-  const res = await fetch(`${GROQ_API}/chat/completions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: `Você é um assistente especializado em reuniões. Responda em ${language}. Retorne APENAS JSON sem markdown.` },
-        { role: 'user', content: `Analise esta transcrição e retorne JSON com: {"summary": "resumo executivo em 3-5 parágrafos", "actionItems": ["tarefa1", "tarefa2"]}\n\n${fullText}` },
-      ],
-      temperature: 0.3,
-      max_tokens: 1024,
-      response_format: { type: 'json_object' },
-    }),
-  });
+  const systemPrompt = `Você é um assistente especializado em reuniões. Responda em ${language}. Retorne APENAS JSON válido sem markdown nem blocos de código.`;
+  const userPrompt = `Analise esta transcrição e retorne JSON com: {"summary": "resumo executivo em 3-5 parágrafos", "actionItems": ["tarefa1", "tarefa2"]}\n\n${fullText}`;
 
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `Erro Groq LLaMA: ${res.statusText}`);
-  }
-
-  const data = await res.json();
-  const content = data.choices?.[0]?.message?.content;
-  if (!content) return undefined;
+  const raw = await callGemini(systemPrompt, userPrompt);
 
   try {
-    const parsed = JSON.parse(content);
+    // Remove possíveis blocos de código do JSON
+    const clean = raw.replace(/\`\`\`json|\`\`\`/g, '').trim();
+    const parsed = JSON.parse(clean);
     return {
       summary: parsed.summary || '',
       actionItems: Array.isArray(parsed.actionItems) ? parsed.actionItems : [],
     };
   } catch {
-    return { summary: content, actionItems: [] };
+    return { summary: raw, actionItems: [] };
   }
 }
 
@@ -244,6 +253,47 @@ export async function summarizeMeeting(
 // CHAT — usa transcrição limpa
 // ─────────────────────────────────────────────
 export async function chatWithTranscript(
+  transcript: TranscriptSegment[],
+  userPrompt: string,
+  lang: string = 'pt-BR',
+  userApiKey?: string | null
+): Promise<string> {
+  const cleanSegments = cleanTranscriptSegments(transcript);
+  // Gemini tem 1M tokens — sem truncamento necessário
+  const fullText = cleanSegments.map(s => s.text).join('\n');
+  const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
+
+  const systemPrompt = `Você é um assistente executivo especializado em gestão de reuniões corporativas. Responda em ${language}.
+
+Ao elaborar atas formais, siga este modelo:
+
+# ATA DE REUNIÃO
+
+**Data:** [data da reunião]
+**Participantes:** [identificados na transcrição]
+
+---
+
+## 1. ABERTURA
+## 2. ASSUNTOS TRATADOS
+### 2.1 [Primeiro assunto]
+## 3. DECISÕES TOMADAS
+## 4. PRÓXIMOS PASSOS
+| Ação | Responsável | Prazo |
+|------|-------------|-------|
+## 5. ENCERRAMENTO
+
+---
+*Ata elaborada automaticamente pelo VoxMeet*
+
+Use markdown rico para outros formatos. Seja detalhado e profissional.`;
+
+  const prompt = `Transcrição:\n\n${fullText}\n\nSolicitação: ${userPrompt}`;
+  return await callGemini(systemPrompt, prompt);
+}
+
+// Mantido para compatibilidade — não usado diretamente
+async function _chatWithGroq(
   transcript: TranscriptSegment[],
   userPrompt: string,
   lang: string = 'pt-BR',
@@ -260,7 +310,7 @@ export async function chatWithTranscript(
     body: JSON.stringify({
       model: 'llama-3.3-70b-versatile',
       messages: [
-        { role: 'system', content: `Você é um assistente executivo especializado em gestão de reuniões corporativas. Responda em ${language}.
+        { role: 'system', content: `Assistente de reuniões. Responda em ${language}.
 
 Ao elaborar atas formais, siga rigorosamente este modelo:
 

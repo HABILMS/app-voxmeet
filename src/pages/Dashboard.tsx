@@ -7,6 +7,7 @@ import { collection, query, orderBy, onSnapshot, doc, setDoc, deleteDoc, updateD
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from '../lib/firebase';
 import { MeetingRecorder } from '../components/MeetingRecorder';
 import { AuthModal } from '../components/AuthModal';
+import { AudioRecovery } from '../components/AudioRecovery';
 import { MeetingList } from '../components/MeetingList';
 import { MeetingDetail } from '../components/MeetingDetail';
 import { PremiumOverlay } from '../components/PremiumOverlay';
@@ -209,6 +210,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
+          {currentUser && <AudioRecovery userProfile={userProfile} onRecover={(segments, segmentsClean, source) => handleSaveMeeting(segments, segmentsClean, source)} />}
           {currentUser && <MinutesIndicator />}
           <main className="flex-1 relative z-10">
             <AnimatePresence mode="wait">
