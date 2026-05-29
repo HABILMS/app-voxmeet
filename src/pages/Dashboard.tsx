@@ -210,7 +210,7 @@ export default function Dashboard() {
         </div>
       ) : (
         <>
-          {currentUser && <AudioRecovery userProfile={userProfile} onRecover={(segments, segmentsClean, source) => handleSaveMeeting(segments, segmentsClean, source)} />}
+          {currentUser && <AudioRecovery userProfile={userProfile} onRecover={(segs, segsClean, src) => handleSaveMeeting(segs, segsClean, src)} />}
           {currentUser && <MinutesIndicator />}
           <main className="flex-1 relative z-10">
             <AnimatePresence mode="wait">
