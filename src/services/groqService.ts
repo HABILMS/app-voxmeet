@@ -14,9 +14,14 @@ function resolveGeminiKey(): string {
   return key;
 }
 
+// Base URL — usa Vercel em produção/Capacitor, relativo em dev
+const API_BASE = (window.location.hostname === 'localhost' && (window as any).Capacitor?.isNativePlatform?.())
+  ? 'https://voxmeet.vercel.app'
+  : '';
+
 // Chamada ao Gemini via servidor seguro (chave nunca exposta no browser)
 async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
-  const res = await fetch('/api/ai', {
+  const res = await fetch(`${API_BASE}/api/ai`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ systemPrompt, userPrompt }),
@@ -168,7 +173,7 @@ async function transcribeChunk(
     });
   } else {
     // Produção: usa API Route segura do Vercel
-    res = await fetch('/api/transcribe', {
+    res = await fetch(`${API_BASE}/api/transcribe`, {
       method: 'POST',
       body: formData,
     });
