@@ -14,24 +14,19 @@ function resolveGeminiKey(): string {
   return key;
 }
 
-// Chamada genérica ao Gemini
+// Chamada ao Gemini via servidor seguro (chave nunca exposta no browser)
 async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
-  const key = resolveGeminiKey();
-  const res = await fetch(`${GEMINI_API}/${GEMINI_MODEL}:generateContent?key=${key}`, {
+  const res = await fetch('/api/ai', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-      generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
-    }),
+    body: JSON.stringify({ systemPrompt, userPrompt }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `Erro Gemini: ${res.statusText}`);
+    throw new Error(err?.error || `Erro Gemini: ${res.statusText}`);
   }
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  return data.text || '';
 } // 24MB — cobre até ~1h40min a 32kbps
 
 function resolveApiKey(userApiKey?: string | null): string {
@@ -152,16 +147,32 @@ async function transcribeChunk(
 
   const formData = new FormData();
   formData.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
-  formData.append('model', 'whisper-large-v3-turbo');
   formData.append('language', lang);
-  formData.append('response_format', 'verbose_json');
-  formData.append('timestamp_granularities[]', 'segment');
 
-  const res = await fetch(`${GROQ_API}/audio/transcriptions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: formData,
-  });
+  // Usa servidor seguro em produção, direto em dev local
+  const isLocalDev = window.location.hostname === 'localhost';
+  let res: Response;
+
+  if (isLocalDev && apiKey) {
+    // Dev: chama Groq diretamente com a chave local
+    const fd = new FormData();
+    fd.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
+    fd.append('model', 'whisper-large-v3-turbo');
+    fd.append('language', lang);
+    fd.append('response_format', 'verbose_json');
+    fd.append('timestamp_granularities[]', 'segment');
+    res = await fetch(`${GROQ_API}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: fd,
+    });
+  } else {
+    // Produção: usa API Route segura do Vercel
+    res = await fetch('/api/transcribe', {
+      method: 'POST',
+      body: formData,
+    });
+  }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));

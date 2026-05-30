@@ -7,6 +7,7 @@ import {
   AlertCircle, CheckCircle2, Upload, Pause, Play, Clock
 } from 'lucide-react';
 import { useTranscription } from '../hooks/useTranscription';
+import { SpeakerphoneAlert } from './SpeakerphoneAlert';
 import { cn } from '../lib/utils';
 import { TranscriptSegment, MeetingSource, UserProfile, PLAN_CONFIGS } from '../types';
 import { summarizeMeeting, chatWithTranscript, transcribeAudio } from '../services/groqService';
@@ -54,6 +55,7 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
   const [uploadLoading, setUploadLoading] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
+  const [showSpeakerAlert, setShowSpeakerAlert] = useState(false);
   const [showLimitWarning, setShowLimitWarning] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -98,6 +100,16 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
       }
     };
   }, [isRecording, isPaused, maxRecordingSeconds]);
+
+  // Mostra alerta de viva-voz no mobile ao iniciar
+  useEffect(() => {
+    if (isRecording && isMobileDevice) {
+      setShowSpeakerAlert(true);
+    }
+    if (!isRecording) {
+      setShowSpeakerAlert(false);
+    }
+  }, [isRecording]);
 
   // Reset ao parar gravação
   useEffect(() => {
@@ -256,6 +268,9 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
           </label>
         </div>
       </div>
+
+      {/* Aviso viva-voz — mobile only */}
+      <SpeakerphoneAlert isVisible={showSpeakerAlert} onDismiss={() => setShowSpeakerAlert(false)} />
 
       {/* Aviso de limite próximo */}
       <AnimatePresence>
