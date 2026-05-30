@@ -4,12 +4,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft, Download, Sparkles, Trash2, Pencil,
   Loader2, MessageSquare, Brain, X, Send,
-  FileText, CheckCircle2, Copy, Check, Volume2, VolumeX, Square
+  FileText, CheckCircle2, Copy, Check, Volume2, Square, Languages
 } from 'lucide-react';
 import { Meeting, UserProfile } from '../types';
 import ReactMarkdown from 'react-markdown';
 import { chatWithTranscript } from '../services/groqService';
 import { cn } from '../lib/utils';
+
 interface MeetingDetailProps {
   meeting: Meeting;
   onBack: () => void;
@@ -31,23 +32,24 @@ export function MeetingDetail({
   const [chatResponse, setChatResponse] = useState('');
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [copied, setCopied] = useState(false);
-  const responseEndRef = useRef<HTMLDivElement>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speakingTarget, setSpeakingTarget] = useState<'summary' | 'chat' | null>(null);
+  const responseEndRef = useRef<HTMLDivElement>(null);
+
+  const userApiKey = userProfile?.apiKey ?? null;
+  const lang = userProfile?.language ?? 'pt-BR';
 
   const speak = (text: string, target: 'summary' | 'chat') => {
     if (!('speechSynthesis' in window)) {
       alert('Seu browser não suporta leitura em voz alta.');
       return;
     }
-    // Se já está falando, para
     if (isSpeaking) {
       window.speechSynthesis.cancel();
       setIsSpeaking(false);
       setSpeakingTarget(null);
       return;
     }
-    // Remove markdown para leitura mais limpa
     const cleanText = text
       .replace(/#{1,6}\s/g, '')
       .replace(/\*\*/g, '')
@@ -64,7 +66,6 @@ export function MeetingDetail({
     utterance.rate = 0.95;
     utterance.pitch = 1;
 
-    // Tenta usar voz em português se disponível
     const voices = window.speechSynthesis.getVoices();
     const ptVoice = voices.find(v => v.lang.startsWith('pt'));
     if (ptVoice) utterance.voice = ptVoice;
@@ -76,10 +77,6 @@ export function MeetingDetail({
     window.speechSynthesis.speak(utterance);
   };
 
-  const userApiKey = userProfile?.apiKey ?? null;
-  const lang = userProfile?.language ?? 'pt-BR';
-
-  // Exportar transcrição como TXT
   const exportTXT = () => {
     const lines = meeting.transcript.map(
       (s) => `[${new Date(s.timestamp).toLocaleTimeString()}]${s.speaker ? ` ${s.speaker}:` : ''} ${s.text}`
@@ -96,11 +93,9 @@ export function MeetingDetail({
       `\n━━ TRANSCRIÇÃO COMPLETA ━━\n`,
       ...lines,
     ].filter(Boolean).join('\n');
-
     download(content, `voxmeet_${meeting.title}.txt`, 'text/plain');
   };
 
-  // Copiar transcrição
   const copyTranscript = async () => {
     const text = meeting.transcript.map((s) => s.text).join('\n\n');
     await navigator.clipboard.writeText(text);
@@ -118,14 +113,14 @@ export function MeetingDetail({
     URL.revokeObjectURL(url);
   };
 
-  // Chat com IA sobre a reunião
   const handleChatRequest = async () => {
     if (!chatPrompt.trim() || meeting.transcript.length === 0) return;
     setIsProcessingAI(true);
     setChatResponse('');
     try {
       const response = await chatWithTranscript(
-        meeting.transcript, chatPrompt, lang, userApiKey
+        meeting.transcriptClean?.length ? meeting.transcriptClean : meeting.transcript,
+        chatPrompt, lang, userApiKey
       );
       setChatResponse(response);
       setTimeout(() => responseEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
@@ -142,76 +137,46 @@ export function MeetingDetail({
   };
 
   const sourceLabel: Record<string, string> = {
-    mic: 'Microfone',
-    system: 'Meeting (sistema)',
-    whatsapp: 'WhatsApp',
-    meet: 'Google Meet',
-    teams: 'Teams',
-    zoom: 'Zoom',
-    upload: 'Upload',
+    mic: 'Microfone', system: 'Meeting (sistema)', whatsapp: 'WhatsApp',
+    meet: 'Google Meet', teams: 'Teams', zoom: 'Zoom', upload: 'Upload',
   };
 
   return (
     <div className="max-w-4xl mx-auto w-full px-6 py-8 h-full flex flex-col">
-
-      {/* Header */}
       <header className="flex items-center justify-between mb-8 gap-3 flex-wrap">
         <button onClick={onBack} className="p-2 glass rounded-2xl hover:bg-white/10 transition-colors">
           <ArrowLeft className="w-6 h-6 text-white" />
         </button>
-
         <div className="flex gap-2 flex-wrap">
           <button onClick={() => { setEditTitle(meeting.title || ""); setIsEditingTitle(true); }} className="btn-secondary text-blue-400 flex items-center gap-2">
             <Pencil className="w-4 h-4" /> Renomear
           </button>
-          <button
-            onClick={() => setIsChatOpen(true)}
-            className="btn-secondary text-blue-400 flex items-center gap-2"
-          >
-            <MessageSquare className="w-4 h-4" />
-            Chat IA
+          <button onClick={() => setIsChatOpen(true)} className="btn-secondary text-blue-400 flex items-center gap-2">
+            <MessageSquare className="w-4 h-4" /> Chat IA
           </button>
-
-          <button
-            onClick={() => onSummarize(meeting.id)}
-            disabled={isSummarizing || !!meeting.summary}
-            className="btn-secondary disabled:opacity-40 flex items-center gap-2"
-          >
-            {isSummarizing
-              ? <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
-              : <Sparkles className="w-4 h-4 text-purple-400" />
-            }
+          <button onClick={() => onSummarize(meeting.id)} disabled={isSummarizing || !!meeting.summary} className="btn-secondary disabled:opacity-40 flex items-center gap-2">
+            {isSummarizing ? <Loader2 className="w-4 h-4 animate-spin text-purple-400" /> : <Sparkles className="w-4 h-4 text-purple-400" />}
             {meeting.summary ? 'Resumido' : 'Resumir'}
           </button>
-
           <button onClick={copyTranscript} className="btn-secondary flex items-center gap-2">
             {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4" />}
             {copied ? 'Copiado!' : 'Copiar'}
           </button>
-
           <button onClick={exportTXT} className="btn-secondary flex items-center gap-2">
-            <Download className="w-4 h-4" />
-            TXT
+            <Download className="w-4 h-4" /> TXT
           </button>
-
-          <button
-            onClick={() => onDelete(meeting.id)}
-            className="p-2.5 glass rounded-2xl text-red-400 hover:bg-red-400/10 transition-colors"
-          >
+          <button onClick={() => onDelete(meeting.id)} className="p-2.5 glass rounded-2xl text-red-400 hover:bg-red-400/10 transition-colors">
             <Trash2 className="w-5 h-5" />
           </button>
         </div>
       </header>
 
-      {/* Conteúdo */}
       <div className="flex-1 overflow-y-auto space-y-10 pb-20 scrollbar-hide">
-
-        {/* Título e metadados */}
         <section className="space-y-2">
           {isEditingTitle ? (
             <div className="flex items-center gap-2">
               <input autoFocus value={editTitle} onChange={e => setEditTitle(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter") { onRename(meeting.id, editTitle); setIsEditingTitle(false); } if (e.key === "Escape") setIsEditingTitle(false); }}
+                onKeyDown={e => { if (e.key === 'Enter') { onRename(meeting.id, editTitle); setIsEditingTitle(false); } if (e.key === 'Escape') setIsEditingTitle(false); }}
                 className="flex-1 bg-white/10 border border-white/20 rounded-xl px-4 py-2 text-3xl font-serif italic text-white outline-none focus:border-blue-500/50"
               />
               <button onClick={() => { onRename(meeting.id, editTitle); setIsEditingTitle(false); }} className="p-2 text-green-400 hover:bg-green-400/10 rounded-xl"><Check className="w-5 h-5" /></button>
@@ -225,22 +190,14 @@ export function MeetingDetail({
               </button>
             </div>
           )}
-
-
           <div className="flex items-center gap-3 text-white/30 font-mono text-xs uppercase tracking-widest flex-wrap">
             <span>{new Date(meeting.createdAt).toLocaleString()}</span>
             <span>·</span>
             <span>{Math.floor(meeting.duration / 60)}min {meeting.duration % 60}s</span>
-            {meeting.source && (
-              <>
-                <span>·</span>
-                <span>{sourceLabel[meeting.source] ?? meeting.source}</span>
-              </>
-            )}
+            {meeting.source && <><span>·</span><span>{sourceLabel[meeting.source] ?? meeting.source}</span></>}
           </div>
         </section>
 
-        {/* Resumindo... */}
         {isSummarizing && (
           <div className="glass-card bg-purple-500/10 border-purple-500/20 p-8 flex flex-col items-center gap-4 text-center">
             <motion.div animate={{ rotate: 360 }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }}>
@@ -250,13 +207,8 @@ export function MeetingDetail({
           </div>
         )}
 
-        {/* Resumo */}
         {meeting.summary && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass-card bg-purple-500/5 border-purple-500/10 p-8 space-y-4"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card bg-purple-500/5 border-purple-500/10 p-8 space-y-4">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2 text-purple-400">
                 <Sparkles className="w-5 h-5" />
@@ -266,11 +218,8 @@ export function MeetingDetail({
                 onClick={() => speak(meeting.summary || '', 'summary')}
                 className={cn(
                   "flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors",
-                  speakingTarget === 'summary'
-                    ? "bg-purple-500/20 text-purple-300"
-                    : "bg-white/5 text-white/40 hover:text-white/70"
+                  speakingTarget === 'summary' ? "bg-purple-500/20 text-purple-300" : "bg-white/5 text-white/40 hover:text-white/70"
                 )}
-                title={speakingTarget === 'summary' ? "Parar leitura" : "Ouvir resumo"}
               >
                 {speakingTarget === 'summary'
                   ? <><Square className="w-3 h-3 fill-current" /> Parar</>
@@ -284,13 +233,8 @@ export function MeetingDetail({
           </motion.div>
         )}
 
-        {/* Action Items */}
         {meeting.actionItems && meeting.actionItems.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="glass-card bg-green-500/5 border-green-500/10 p-6 space-y-3"
-          >
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="glass-card bg-green-500/5 border-green-500/10 p-6 space-y-3">
             <div className="flex items-center gap-2 text-green-400 mb-2">
               <CheckCircle2 className="w-5 h-5" />
               <h3 className="font-bold uppercase tracking-widest text-xs">Action Items</h3>
@@ -306,11 +250,9 @@ export function MeetingDetail({
           </motion.div>
         )}
 
-        {/* Transcrição completa */}
         <section className="space-y-6">
           <h3 className="text-xs font-mono uppercase tracking-[0.2em] text-white/20 flex items-center gap-2">
-            <FileText className="w-3.5 h-3.5" />
-            Transcrição Completa
+            <FileText className="w-3.5 h-3.5" /> Transcrição Completa
           </h3>
           <div className="space-y-8">
             {meeting.transcript.map((segment) => (
@@ -319,9 +261,7 @@ export function MeetingDetail({
                   <span className="block text-[10px] font-mono text-white/20">
                     {new Date(segment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   </span>
-                  {segment.speaker && (
-                    <span className="block text-[10px] font-mono text-blue-400/60">{segment.speaker}</span>
-                  )}
+                  {segment.speaker && <span className="block text-[10px] font-mono text-blue-400/60">{segment.speaker}</span>}
                 </div>
                 <p className="text-xl font-light text-white/80 leading-relaxed group-hover:text-white transition-colors">
                   {segment.text}
@@ -335,17 +275,11 @@ export function MeetingDetail({
       {/* Modal Chat IA */}
       <AnimatePresence>
         {isChatOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
             onClick={() => !isProcessingAI && setIsChatOpen(false)}
           >
-            <motion.div
-              initial={{ y: 40, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 40, opacity: 0 }}
+            <motion.div initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 40, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
               className="w-full max-w-2xl bg-[#0a0a0a] border border-white/10 rounded-[28px] overflow-hidden flex flex-col max-h-[80vh]"
             >
@@ -373,17 +307,23 @@ export function MeetingDetail({
                         <ReactMarkdown>{chatResponse}</ReactMarkdown>
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-3 flex-wrap">
                       <button
-                        onClick={exportChatResponse}
-                        className="text-xs text-white/30 hover:text-green-400 flex items-center gap-1 transition-colors"
+                        onClick={() => speak(chatResponse, 'chat')}
+                        className={cn(
+                          "text-xs flex items-center gap-1 transition-colors",
+                          speakingTarget === 'chat' ? "text-blue-400" : "text-white/30 hover:text-blue-400"
+                        )}
                       >
+                        {speakingTarget === 'chat'
+                          ? <><Square className="w-3 h-3 fill-current" /> Parar leitura</>
+                          : <><Volume2 className="w-3 h-3" /> Ouvir resposta</>
+                        }
+                      </button>
+                      <button onClick={exportChatResponse} className="text-xs text-white/30 hover:text-green-400 flex items-center gap-1 transition-colors">
                         <Download className="w-3 h-3" /> Exportar TXT
                       </button>
-                      <button
-                        onClick={() => { setChatResponse(''); setChatPrompt(''); }}
-                        className="text-xs text-white/30 hover:text-white/60 flex items-center gap-1 ml-2"
-                      >
+                      <button onClick={() => { setChatResponse(''); setChatPrompt(''); }} className="text-xs text-white/30 hover:text-white/60 flex items-center gap-1">
                         <CheckCircle2 className="w-3 h-3" /> Nova pergunta
                       </button>
                     </div>
@@ -393,17 +333,9 @@ export function MeetingDetail({
                     <Brain className="w-10 h-10 opacity-10" />
                     <p className="text-sm">Faça perguntas sobre esta reunião</p>
                     <div className="flex flex-wrap justify-center gap-2">
-                      {[
-                        'Resuma os 3 pontos principais',
-                        'Extraia as tarefas e responsáveis',
-                        'Faça uma ata formal',
-                        'Quais foram as decisões tomadas?',
-                      ].map((p) => (
-                        <button
-                          key={p}
-                          onClick={() => setChatPrompt(p)}
-                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/50 hover:text-white text-xs rounded-full border border-white/5 transition-colors"
-                        >
+                      {['Resuma os 3 pontos principais', 'Extraia as tarefas e responsáveis', 'Faça uma ata formal', 'Quais foram as decisões tomadas?', 'Traduza para o português', 'Translate to English'].map((p) => (
+                        <button key={p} onClick={() => setChatPrompt(p)}
+                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/50 hover:text-white text-xs rounded-full border border-white/5 transition-colors">
                           {p}
                         </button>
                       ))}
@@ -414,23 +346,13 @@ export function MeetingDetail({
               </div>
 
               <div className="p-4 border-t border-white/5 relative">
-                <textarea
-                  value={chatPrompt}
-                  onChange={(e) => setChatPrompt(e.target.value)}
+                <textarea value={chatPrompt} onChange={(e) => setChatPrompt(e.target.value)}
                   placeholder="Ex: Quais foram as decisões tomadas?"
                   className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder:text-white/20 focus:border-blue-500/50 focus:outline-none resize-none h-20"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleChatRequest();
-                    }
-                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatRequest(); } }}
                 />
-                <button
-                  onClick={handleChatRequest}
-                  disabled={isProcessingAI || !chatPrompt.trim()}
-                  className="absolute bottom-7 right-7 p-2 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:opacity-20 transition-all"
-                >
+                <button onClick={handleChatRequest} disabled={isProcessingAI || !chatPrompt.trim()}
+                  className="absolute bottom-7 right-7 p-2 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:opacity-20 transition-all">
                   {isProcessingAI ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 </button>
               </div>
