@@ -15,9 +15,10 @@ function resolveGeminiKey(): string {
 }
 
 // Base URL — usa Vercel em produção/Capacitor, relativo em dev
-const API_BASE = (window.location.hostname === 'localhost' && (window as any).Capacitor?.isNativePlatform?.())
-  ? 'https://voxmeet.vercel.app'
-  : '';
+const isCapacitor = (window as any).Capacitor?.isNativePlatform?.() === true;
+const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+// No app nativo (Capacitor), sempre usa o Vercel. No browser, usa relativo.
+const API_BASE = isCapacitor ? 'https://voxmeet.vercel.app' : '';
 
 // Chamada ao Gemini via servidor seguro (chave nunca exposta no browser)
 async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
@@ -155,7 +156,7 @@ async function transcribeChunk(
   formData.append('language', lang);
 
   // Usa servidor seguro em produção, direto em dev local
-  const isLocalDev = window.location.hostname === 'localhost';
+  const isLocalDev = isLocalhost && !isCapacitor;
   let res: Response;
 
   if (isLocalDev && apiKey) {
