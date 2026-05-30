@@ -74,7 +74,7 @@ export default function Dashboard() {
 
   const handleLogout = () => { signOut(auth); navigate('/'); };
 
-  const handleSaveMeeting = async (segments: TranscriptSegment[], source: MeetingSource, audioBlob?: Blob | null) => {
+  const handleSaveMeeting = async (segments: TranscriptSegment[], segmentsClean: TranscriptSegment[], source: MeetingSource, audioBlob?: Blob | null) => {
     if (!currentUser) { setShowPremium(true); return; }
     const meetingId = Math.random().toString(36).substr(2, 9);
     const path = `users/${currentUser.uid}/meetings/${meetingId}`;
@@ -216,7 +216,7 @@ export default function Dashboard() {
             <AnimatePresence mode="wait">
               {view === 'recorder' && (
                 <motion.div key="recorder" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.02 }} className="h-[calc(100vh-80px)]">
-                  <MeetingRecorder onSave={handleSaveMeeting} userProfile={userProfile} />
+                  <MeetingRecorder onSave={(segs, segsClean, src, blob) => handleSaveMeeting(segs, segsClean, src, blob)} userProfile={userProfile} />
                 </motion.div>
               )}
               {view === 'list' && (
