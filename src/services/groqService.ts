@@ -1,23 +1,22 @@
 // src/services/groqService.ts — VoxMeet
-// Groq Whisper + LLaMA — direto do browser, sem passar pelo servidor
+// Groq Whisper (transcrição) + Gemini (resumo/chat) via servidor seguro
 
 import { TranscriptSegment } from '../types';
 
 const GROQ_API = 'https://api.groq.com/openai/v1';
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models';
-const GEMINI_MODEL = 'gemini-2.5-flash';
-const MAX_CHUNK_SIZE = 20 * 1024 * 1024; // 20MB - margem de segurança para API Groq (limite 25MB)
-function resolveGeminiKey(): string {
-  const key = import.meta.env.VITE_GEMINI_API_KEY;
-  if (!key) throw new Error('Chave Gemini não configurada. Adicione VITE_GEMINI_API_KEY no .env.local');
-  return key;
-}
+const MAX_CHUNK_SIZE = 24 * 1024 * 1024; // 24MB — evita dividir WebM (limite Groq 25MB)
 
 // Base URL — usa Vercel em produção/Capacitor, relativo em dev
 const isCapacitor = (window as any).Capacitor?.isNativePlatform?.() === true;
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-// No app nativo (Capacitor), sempre usa o Vercel. No browser, usa relativo.
 const API_BASE = isCapacitor ? 'https://voxmeet.vercel.app' : '';
+
+function resolveApiKey(userApiKey?: string | null): string {
+  if (userApiKey?.trim()) return userApiKey.trim();
+  const key = import.meta.env.VITE_GROQ_API_KEY;
+  if (!key) throw new Error('Chave Groq não configurada. Adicione VITE_GROQ_API_KEY no .env.local');
+  return key;
+}
 
 // Chamada ao Gemini via servidor seguro (chave nunca exposta no browser)
 async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
@@ -32,18 +31,10 @@ async function callGemini(systemPrompt: string, userPrompt: string): Promise<str
   }
   const data = await res.json();
   return data.text || '';
-} // 20MB — margem de segurança para evitar erro 413 da API Groq
-function resolveApiKey(userApiKey?: string | null): string {
-  if (userApiKey?.trim()) return userApiKey.trim();
-  const key = import.meta.env.VITE_GROQ_API_KEY;
-  if (!key) throw new Error('Chave Groq não configurada. Adicione VITE_GROQ_API_KEY no .env.local');
-  return key;
 }
 
 // ─────────────────────────────────────────────
 // LIMPEZA INTELIGENTE DE TRANSCRIÇÃO (Opção C)
-// Remove ruídos, hesitações e fragmentos
-// mantendo o conteúdo semântico completo
 // ─────────────────────────────────────────────
 export function cleanTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
   const NOISE = new Set([
@@ -61,15 +52,10 @@ export function cleanTranscriptSegments(segments: TranscriptSegment[]): Transcri
 
   for (const seg of segments) {
     const text = seg.text.trim();
-
-    // Ignora segmentos de ruído puro
     if (!text || text.length <= 1) continue;
     if (NOISE.has(text.toLowerCase())) continue;
-
-    // Ignora segmentos que são só vogais/pontuação (artefatos do Whisper)
     if (/^[oaeiouáéíóúàãõâêîôûäëïöü\s,\.!\?]+$/i.test(text) && text.length < 4) continue;
 
-    // Acumula fragmentos curtos com o próximo
     if (text.length < 25 && !text.match(/[.!?]$/)) {
       if (!buffer) {
         buffer = text;
@@ -79,15 +65,9 @@ export function cleanTranscriptSegments(segments: TranscriptSegment[]): Transcri
         buffer += ' ' + text;
       }
     } else {
-      // Flush do buffer acumulado
       if (buffer) {
         const fullText = buffer + ' ' + text;
-        cleaned.push({
-          id: bufferId,
-          text: fullText.trim(),
-          timestamp: bufferTimestamp,
-          speaker: seg.speaker,
-        });
+        cleaned.push({ id: bufferId, text: fullText.trim(), timestamp: bufferTimestamp, speaker: seg.speaker });
         buffer = '';
       } else {
         cleaned.push(seg);
@@ -95,28 +75,11 @@ export function cleanTranscriptSegments(segments: TranscriptSegment[]): Transcri
     }
   }
 
-  // Flush final do buffer
   if (buffer) {
-    cleaned.push({
-      id: bufferId,
-      text: buffer.trim(),
-      timestamp: bufferTimestamp,
-    });
+    cleaned.push({ id: bufferId, text: buffer.trim(), timestamp: bufferTimestamp });
   }
 
   return cleaned;
-}
-
-// Converte segments para texto truncado para o Groq
-function buildTextForAI(segments: TranscriptSegment[], maxChars = 18000): string {
-  const text = segments.map(s => s.text).join('\n');
-  if (text.length <= maxChars) return text;
-  const half = Math.floor(maxChars / 2);
-  return (
-    text.slice(0, half) +
-    '\n\n[... trecho intermediário omitido ...]\n\n' +
-    text.slice(-half)
-  );
 }
 
 // ─────────────────────────────────────────────
@@ -124,6 +87,7 @@ function buildTextForAI(segments: TranscriptSegment[], maxChars = 18000): string
 // ─────────────────────────────────────────────
 async function splitAudioIntoChunks(blob: Blob): Promise<Blob[]> {
   if (blob.size <= MAX_CHUNK_SIZE) return [blob];
+
   const chunks: Blob[] = [];
   let offset = 0;
   while (offset < blob.size) {
@@ -131,11 +95,9 @@ async function splitAudioIntoChunks(blob: Blob): Promise<Blob[]> {
     chunks.push(blob.slice(offset, end, blob.type));
     offset = end;
   }
-  console.log(`Áudio dividido em ${chunks.length} chunks de ~${Math.round(MAX_CHUNK_SIZE / 1024 / 1024)}MB cada`);
-console.log(`Tamanho total: ${(blob.size / (1024 * 1024)).toFixed(1)}MB`);
-chunks.forEach((chunk, i) => {
-  console.log(`  Chunk ${i + 1}: ${(chunk.size / (1024 * 1024)).toFixed(1)}MB`);
-});
+
+  console.log(`Áudio dividido em ${chunks.length} chunks de ~${Math.round(MAX_CHUNK_SIZE / 1024 / 1024)}MB`);
+  return chunks; // ✅ CORREÇÃO: estava faltando o return
 }
 
 // ─────────────────────────────────────────────
@@ -152,16 +114,10 @@ async function transcribeChunk(
     : chunk.type.includes('m4a') ? 'm4a'
     : 'webm';
 
-  const formData = new FormData();
-  formData.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
-  formData.append('language', lang);
-
-  // Usa servidor seguro em produção, direto em dev local
   const isLocalDev = isLocalhost && !isCapacitor;
   let res: Response;
 
   if (isLocalDev && apiKey) {
-    // Dev: chama Groq diretamente com a chave local
     const fd = new FormData();
     fd.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
     fd.append('model', 'whisper-large-v3-turbo');
@@ -174,53 +130,39 @@ async function transcribeChunk(
       body: fd,
     });
   } else {
-    // Produção: usa API Route segura do Vercel
-    res = await fetch(`${API_BASE}/api/transcribe`, {
-      method: 'POST',
-      body: formData,
-    });
+    const formData = new FormData();
+    formData.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
+    formData.append('language', lang);
+    res = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: formData });
   }
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `Erro Groq Whisper (chunk ${chunkIndex}): ${res.statusText}`);
+    throw new Error(err?.error?.message || err?.error || `Erro Groq Whisper (chunk ${chunkIndex}): ${res.statusText}`);
   }
 
   const data = await res.json();
-console.log('📦 Resposta API chunk', chunkIndex, ':', JSON.stringify(data).substring(0, 200));
+  if (!data) return [];
 
-// Verifica se a resposta tem dados válidos
-if (!data) {
-  console.error('❌ Resposta vazia da API');
+  if (data.segments && Array.isArray(data.segments) && data.segments.length > 0) {
+    return data.segments.map((seg: any, i: number) => ({
+      id: `seg_${chunkIndex}_${i}_${Math.random().toString(36).substr(2, 6)}`,
+      text: (seg.text || '').trim(),
+      timestamp: baseTimestamp + Math.round((seg.start || 0) * 1000),
+    }));
+  }
+
+  if (data.text) {
+    return [{
+      id: `seg_${chunkIndex}_0_${Math.random().toString(36).substr(2, 6)}`,
+      text: data.text.trim(),
+      timestamp: baseTimestamp,
+    }];
+  }
+
   return [];
 }
 
-// Se tem segments, processa eles
-if (data.segments && Array.isArray(data.segments) && data.segments.length > 0) {
-  return data.segments.map((seg: any, i: number) => ({
-    id: `seg_${chunkIndex}_${i}_${Math.random().toString(36).substr(2, 6)}`,
-    text: (seg.text || '').trim(),
-    timestamp: baseTimestamp + Math.round((seg.start || 0) * 1000),
-  }));
-}
-
-// Se tem text direto (formato simples)
-if (data.text) {
-  return [{
-    id: `seg_${chunkIndex}_0_${Math.random().toString(36).substr(2, 6)}`,
-    text: data.text.trim(),
-    timestamp: baseTimestamp,
-  }];
-}
-
-// Se não tem nada, retorna array vazio
-console.warn('⚠️ Chunk sem texto reconhecido');
-return [{
-  id: `seg_${chunkIndex}_0_${Math.random().toString(36).substr(2, 6)}`,
-  text: '',
-  timestamp: baseTimestamp,
-}];
-}
 export async function transcribeAudio(
   audioBlob: Blob,
   lang: string = 'pt',
@@ -233,6 +175,12 @@ export async function transcribeAudio(
   console.log(`Transcrevendo áudio: ${(audioBlob.size / 1024 / 1024).toFixed(1)}MB`);
 
   const chunks = await splitAudioIntoChunks(audioBlob);
+
+  // Proteção: garante que chunks é um array válido
+  if (!chunks || !Array.isArray(chunks) || chunks.length === 0) {
+    throw new Error('Falha ao processar o áudio. Tente um arquivo diferente.');
+  }
+
   const allSegments: TranscriptSegment[] = [];
   const totalSize = audioBlob.size;
 
@@ -240,30 +188,24 @@ export async function transcribeAudio(
     onProgress?.(i + 1, chunks.length);
     const chunkStartRatio = chunks.slice(0, i).reduce((acc, c) => acc + c.size, 0) / totalSize;
     const baseTimestamp = Date.now() + Math.round(chunkStartRatio * 600 * 1000);
-    
+
     try {
       const segments = await transcribeChunk(chunks[i], langCode, apiKey, i, baseTimestamp);
-      
-      // ✅ Proteção contra retorno undefined/null
-      if (!segments || !Array.isArray(segments)) {
-        console.error(`❌ Chunk ${i} retornou dados inválidos:`, segments);
-        continue; // Pula este chunk em vez de quebrar tudo
+      if (segments && Array.isArray(segments)) {
+        allSegments.push(...segments);
+        console.log(`Chunk ${i + 1}/${chunks.length}: ${segments.length} segmentos`);
       }
-      
-      console.log(`✅ Chunk ${i + 1}: ${segments.length} segmentos`);
-      allSegments.push(...segments);
-      
     } catch (chunkError) {
-      console.error(`❌ Erro no chunk ${i}:`, chunkError);
-      // Continua processando os próximos chunks
+      console.error(`Erro no chunk ${i}:`, chunkError);
+      // Se for o único chunk, propaga o erro; senão continua
+      if (chunks.length === 1) throw chunkError;
     }
-    
+
     if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 500));
   }
 
-  console.log(`📊 Total de segmentos: ${allSegments.length}`);
+  console.log(`Total de segmentos: ${allSegments.length}`);
 
-  // Retorna crua E otimizada
   return {
     raw: allSegments,
     clean: cleanTranscriptSegments(allSegments),
@@ -271,7 +213,7 @@ export async function transcribeAudio(
 }
 
 // ─────────────────────────────────────────────
-// RESUMO + ACTION ITEMS — usa transcrição limpa
+// RESUMO + ACTION ITEMS — via Gemini
 // ─────────────────────────────────────────────
 export async function summarizeMeeting(
   transcript: TranscriptSegment[],
@@ -279,20 +221,17 @@ export async function summarizeMeeting(
   userApiKey?: string | null
 ): Promise<{ summary: string; actionItems: string[] } | undefined> {
   const cleanSegments = cleanTranscriptSegments(transcript);
-  // Gemini tem 1M tokens — sem truncamento necessário
   const fullText = cleanSegments.map(s => s.text).join('\n');
   if (!fullText.trim()) return undefined;
 
   const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
-
   const systemPrompt = `Você é um assistente especializado em reuniões. Responda em ${language}. Retorne APENAS JSON válido sem markdown nem blocos de código.`;
   const userPrompt = `Analise esta transcrição e retorne JSON com: {"summary": "resumo executivo em 3-5 parágrafos", "actionItems": ["tarefa1", "tarefa2"]}\n\n${fullText}`;
 
   const raw = await callGemini(systemPrompt, userPrompt);
 
   try {
-    // Remove possíveis blocos de código do JSON
-    const clean = raw.replace(/\`\`\`json|\`\`\`/g, '').trim();
+    const clean = raw.replace(/```json|```/g, '').trim();
     const parsed = JSON.parse(clean);
     return {
       summary: parsed.summary || '',
@@ -304,7 +243,7 @@ export async function summarizeMeeting(
 }
 
 // ─────────────────────────────────────────────
-// CHAT — usa transcrição limpa
+// CHAT — via Gemini
 // ─────────────────────────────────────────────
 export async function chatWithTranscript(
   transcript: TranscriptSegment[],
@@ -313,7 +252,6 @@ export async function chatWithTranscript(
   userApiKey?: string | null
 ): Promise<string> {
   const cleanSegments = cleanTranscriptSegments(transcript);
-  // Gemini tem 1M tokens — sem truncamento necessário
   const fullText = cleanSegments.map(s => s.text).join('\n');
   const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
 
@@ -344,83 +282,6 @@ Use markdown rico para outros formatos. Seja detalhado e profissional.`;
 
   const prompt = `Transcrição:\n\n${fullText}\n\nSolicitação: ${userPrompt}`;
   return await callGemini(systemPrompt, prompt);
-}
-
-// Mantido para compatibilidade — não usado diretamente
-async function _chatWithGroq(
-  transcript: TranscriptSegment[],
-  userPrompt: string,
-  lang: string = 'pt-BR',
-  userApiKey?: string | null
-): Promise<string> {
-  const apiKey = resolveApiKey(userApiKey);
-  const cleanSegments = cleanTranscriptSegments(transcript);
-  const fullText = buildTextForAI(cleanSegments);
-  const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
-
-  const res = await fetch(`${GROQ_API}/chat/completions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: `Assistente de reuniões. Responda em ${language}.
-
-Ao elaborar atas formais, siga rigorosamente este modelo:
-
-# ATA DE REUNIÃO
-
-**Data:** [data da reunião]
-**Hora de início:** [hora]  
-**Hora de término:** [hora]
-**Participantes:** [nomes identificados na transcrição ou "Participantes não identificados"]
-
----
-
-## 1. ABERTURA
-[Como a reunião foi aberta e objetivo inicial]
-
-## 2. ASSUNTOS TRATADOS
-[Liste cada assunto discutido em subseções numeradas com detalhes relevantes]
-
-### 2.1 [Primeiro assunto]
-[Descrição detalhada, argumentos apresentados, valores mencionados]
-
-### 2.2 [Segundo assunto]
-...
-
-## 3. DECISÕES TOMADAS
-[Liste em bullets todas as decisões concretas tomadas]
-- **Decisão 1:** descrição
-- **Decisão 2:** descrição
-
-## 4. PENDÊNCIAS E PRÓXIMOS PASSOS
-[Tarefas, responsáveis e prazos mencionados]
-| Ação | Responsável | Prazo |
-|------|-------------|-------|
-| ... | ... | ... |
-
-## 5. ENCERRAMENTO
-[Como a reunião foi encerrada]
-
----
-*Ata elaborada automaticamente pelo VoxMeet*
-
-Para resumos, análises e outros formatos, use markdown rico com títulos, subtítulos, tabelas e bullets conforme necessário. Nunca retorne texto simples sem formatação.` },
-        { role: 'user', content: `Transcrição da reunião:\n\n${fullText}\n\nSolicitação do usuário: ${userPrompt}\n\nIMPORTANTE: Seja detalhado, profissional e use formatação markdown rica. Extraia o máximo de informação da transcrição.` },
-      ],
-      temperature: 0.5,
-      max_tokens: 4096,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || `Erro Groq Chat: ${res.statusText}`);
-  }
-
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || 'Sem resposta da IA.';
 }
 
 // ─────────────────────────────────────────────
