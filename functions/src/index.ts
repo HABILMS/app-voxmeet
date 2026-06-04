@@ -8,7 +8,6 @@ const db = admin.firestore();
 
 setGlobalOptions({ region: 'southamerica-east1' });
 
-// Retenção por plano (dias) — null = ilimitado
 const RETENTION_DAYS: Record<string, number | null> = {
   starter: 7,
   pro: 90,
@@ -18,7 +17,6 @@ const RETENTION_DAYS: Record<string, number | null> = {
   power: null,
 };
 
-// Roda todo dia às 3h da manhã (horário de Brasília)
 export const expireMeetings = onSchedule(
   { schedule: '0 3 * * *', timeZone: 'America/Sao_Paulo' },
   async () => {
@@ -31,7 +29,7 @@ export const expireMeetings = onSchedule(
       const plan = userDoc.data().plan || 'starter';
       const retentionDays = RETENTION_DAYS[plan];
 
-      if (retentionDays === null) continue; // plano ilimitado
+      if (retentionDays === null) continue;
 
       const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
 
@@ -41,7 +39,6 @@ export const expireMeetings = onSchedule(
         .get();
 
       if (meetingsSnap.size > 0) {
-        // Firestore permite até 500 operações por batch
         const docs = meetingsSnap.docs;
         for (let i = 0; i < docs.length; i += 450) {
           const batch = db.batch();
@@ -49,10 +46,10 @@ export const expireMeetings = onSchedule(
           await batch.commit();
         }
         totalDeleted += meetingsSnap.size;
-        console.log(`Usuário ${userDoc.id} (${plan}): ${meetingsSnap.size} reuniões expiradas removidas`);
+        console.log(`Usuario ${userDoc.id} (${plan}): ${meetingsSnap.size} reunioes expiradas removidas`);
       }
     }
 
-    console.log(`Limpeza concluída: ${totalDeleted} reuniões expiradas removidas no total`);
+    console.log(`Limpeza concluida: ${totalDeleted} reunioes expiradas removidas no total`);
   }
 );

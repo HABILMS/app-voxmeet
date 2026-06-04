@@ -11,6 +11,44 @@ const isCapacitor = (window as any).Capacitor?.isNativePlatform?.() === true;
 const isLocalhost = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
 const API_BASE = isCapacitor ? 'https://voxmeet.vercel.app' : '';
 
+// ─────────────────────────────────────────────
+// RETRY automático com backoff exponencial
+// Reexecuta quando o servidor está sobrecarregado (429/503/high demand)
+// ─────────────────────────────────────────────
+async function withRetry<T>(
+  fn: () => Promise<T>,
+  opts: { maxRetries?: number; baseDelayMs?: number; onRetry?: (attempt: number, wait: number) => void } = {}
+): Promise<T> {
+  const { maxRetries = 3, baseDelayMs = 2000, onRetry } = opts;
+  let lastErr: any;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const msg = (err?.message || '').toLowerCase();
+      const isOverloaded =
+        msg.includes('high demand') ||
+        msg.includes('overloaded') ||
+        msg.includes('rate limit') ||
+        msg.includes('429') ||
+        msg.includes('503') ||
+        msg.includes('try again') ||
+        msg.includes('quota');
+
+      // Só faz retry se for sobrecarga e ainda houver tentativas
+      if (!isOverloaded || attempt === maxRetries) throw err;
+
+      const wait = baseDelayMs * Math.pow(2, attempt); // 2s, 4s, 8s
+      onRetry?.(attempt + 1, wait);
+      console.log(`Servidor sobrecarregado. Tentativa ${attempt + 1}/${maxRetries} em ${wait / 1000}s...`);
+      await new Promise(r => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
 function resolveApiKey(userApiKey?: string | null): string {
   if (userApiKey?.trim()) return userApiKey.trim();
   const key = import.meta.env.VITE_GROQ_API_KEY;
@@ -20,17 +58,20 @@ function resolveApiKey(userApiKey?: string | null): string {
 
 // Chamada ao Gemini via servidor seguro (chave nunca exposta no browser)
 async function callGemini(systemPrompt: string, userPrompt: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/api/ai`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ systemPrompt, userPrompt }),
+  return withRetry(async () => {
+    const res = await fetch(`${API_BASE}/api/ai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ systemPrompt, userPrompt }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      const errMsg = err?.error || `Erro Gemini: ${res.statusText}`;
+      throw new Error(res.status === 429 || res.status === 503 ? `${errMsg} (429/503)` : errMsg);
+    }
+    const data = await res.json();
+    return data.text || '';
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error || `Erro Gemini: ${res.statusText}`);
-  }
-  const data = await res.json();
-  return data.text || '';
 }
 
 // ─────────────────────────────────────────────
@@ -190,16 +231,19 @@ async function transcribeChunk(
   fd.append('response_format', 'verbose_json');
   fd.append('timestamp_granularities[]', 'segment');
 
-  const res = await fetch(`${GROQ_API}/audio/transcriptions`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${apiKey}` },
-    body: fd,
+  const res = await withRetry(async () => {
+    const r = await fetch(`${GROQ_API}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      body: fd,
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      const errMsg = err?.error?.message || err?.error || `Erro Groq Whisper (chunk ${chunkIndex}): ${r.statusText}`;
+      throw new Error((r.status === 429 || r.status === 503) ? `${errMsg} (429/503)` : errMsg);
+    }
+    return r;
   });
-
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err?.error?.message || err?.error || `Erro Groq Whisper (chunk ${chunkIndex}): ${res.statusText}`);
-  }
 
   const data = await res.json();
   if (!data) return [];
@@ -343,6 +387,54 @@ Use markdown rico para outros formatos. Seja detalhado e profissional.`;
   const prompt = `Transcrição:\n\n${fullText}\n\nSolicitação: ${userPrompt}`;
   return await callGemini(systemPrompt, prompt);
 }
+
+// ─────────────────────────────────────────────
+// DIARIZAÇÃO (Opção A) — Gemini separa falantes por contexto
+// Análise aproximada baseada no texto, não no áudio
+// ─────────────────────────────────────────────
+export async function identifySpeakers(
+  transcript: TranscriptSegment[],
+  lang: string = 'pt-BR'
+): Promise<TranscriptSegment[]> {
+  const cleanSegments = cleanTranscriptSegments(transcript);
+  const fullText = cleanSegments.map((s, i) => `[${i}] ${s.text}`).join('\n');
+  if (!fullText.trim()) return transcript;
+
+  const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
+
+  const systemPrompt = `Você é um especialista em análise de reuniões. Analise a transcrição e identifique quantos falantes diferentes participaram, atribuindo cada trecho a um falante. Use pistas como mudança de assunto, perguntas e respostas, primeira/segunda pessoa, nomes mencionados. Responda em ${language}. Retorne APENAS JSON válido sem markdown.`;
+
+  const userPrompt = `A transcrição abaixo tem trechos numerados [0], [1], etc. Identifique os falantes e retorne JSON no formato:
+{"speakers": ["Participante 1", "Participante 2"], "segments": [{"index": 0, "speaker": "Participante 1"}, {"index": 1, "speaker": "Participante 2"}]}
+
+Se nomes próprios forem mencionados, use-os em vez de "Participante N". Se houver apenas um falante, atribua tudo a ele.
+
+Transcrição:
+${fullText}`;
+
+  try {
+    const raw = await callGemini(systemPrompt, userPrompt);
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+
+    if (!parsed.segments || !Array.isArray(parsed.segments)) return transcript;
+
+    // Mapeia speakers de volta aos segmentos limpos
+    const speakerMap = new Map<number, string>();
+    parsed.segments.forEach((s: any) => {
+      if (typeof s.index === 'number' && s.speaker) speakerMap.set(s.index, s.speaker);
+    });
+
+    return cleanSegments.map((seg, i) => ({
+      ...seg,
+      speaker: speakerMap.get(i) || seg.speaker,
+    }));
+  } catch (err) {
+    console.warn('Falha na diarização:', err);
+    return transcript;
+  }
+}
+
 // ─────────────────────────────────────────────
 // VALIDAR CHAVE
 // ─────────────────────────────────────────────
