@@ -1,58 +1,83 @@
-// functions/src/index.ts — Cloud Functions VoxMeet
-import { onSchedule } from 'firebase-functions/v2/scheduler';
-import { setGlobalOptions } from 'firebase-functions/v2';
-import * as admin from 'firebase-admin';
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
 
-admin.initializeApp();
-const db = admin.firestore();
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
 
-setGlobalOptions({ region: 'southamerica-east1' });
-
-// Retenção por plano (dias) — null = ilimitado
-const RETENTION_DAYS: Record<string, number | null> = {
-  starter: 7,
-  pro: 90,
-  pro_monthly: 90,
-  ultra: 365,
-  pro_annual: 365,
-  power: null,
-};
-
-// Roda todo dia às 3h da manhã (horário de Brasília)
-export const expireMeetings = onSchedule(
-  { schedule: '0 3 * * *', timeZone: 'America/Sao_Paulo' },
-  async () => {
-    const now = Date.now();
-    let totalDeleted = 0;
-
-    const usersSnap = await db.collection('users').get();
-
-    for (const userDoc of usersSnap.docs) {
-      const plan = userDoc.data().plan || 'starter';
-      const retentionDays = RETENTION_DAYS[plan];
-
-      if (retentionDays === null) continue; // plano ilimitado
-
-      const cutoff = now - retentionDays * 24 * 60 * 60 * 1000;
-
-      const meetingsSnap = await db
-        .collection(`users/${userDoc.id}/meetings`)
-        .where('createdAt', '<', cutoff)
-        .get();
-
-      if (meetingsSnap.size > 0) {
-        // Firestore permite até 500 operações por batch
-        const docs = meetingsSnap.docs;
-        for (let i = 0; i < docs.length; i += 450) {
-          const batch = db.batch();
-          docs.slice(i, i + 450).forEach(d => batch.delete(d.ref));
-          await batch.commit();
-        }
-        totalDeleted += meetingsSnap.size;
-        console.log(`Usuário ${userDoc.id} (${plan}): ${meetingsSnap.size} reuniões expiradas removidas`);
-      }
-    }
-
-    console.log(`Limpeza concluída: ${totalDeleted} reuniões expiradas removidas no total`);
+@layer base {
+  body {
+    background-color: #050505;
+    color: white;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
-);
+}
+
+@layer utilities {
+  .glass {
+    backdrop-filter: blur(24px);
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+  }
+
+  .glass-card {
+    backdrop-filter: blur(24px);
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 24px;
+    padding: 1.5rem;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  }
+
+  .btn-primary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    background-color: white;
+    color: black;
+    font-weight: 600;
+    border-radius: 9999px;
+    transition: all 0.2s;
+  }
+
+  .btn-primary:active {
+    transform: scale(0.95);
+  }
+
+  .btn-primary:hover {
+    background-color: rgba(255, 255, 255, 0.9);
+  }
+
+  .btn-secondary {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.75rem 1.5rem;
+    backdrop-filter: blur(24px);
+    background-color: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 9999px;
+    transition: all 0.2s;
+  }
+
+  .btn-secondary:active {
+    transform: scale(0.95);
+  }
+
+  .btn-secondary:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+  }
+
+  .gradient-text {
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    background-image: linear-gradient(to right, white, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.5));
+  }
+}
