@@ -26,7 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: JSON.stringify({
         system_instruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 8192 },
+        generationConfig: { temperature: 0.3, maxOutputTokens: 16384 },
       }),
     });
 

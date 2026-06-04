@@ -397,38 +397,51 @@ export async function identifySpeakers(
   lang: string = 'pt-BR'
 ): Promise<TranscriptSegment[]> {
   const cleanSegments = cleanTranscriptSegments(transcript);
-  const fullText = cleanSegments.map((s, i) => `[${i}] ${s.text}`).join('\n');
-  if (!fullText.trim()) return transcript;
+  if (cleanSegments.length === 0) return transcript;
 
   const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
 
-  const systemPrompt = `Você é um especialista em análise de reuniões. Analise a transcrição e identifique quantos falantes diferentes participaram, atribuindo cada trecho a um falante. Use pistas como mudança de assunto, perguntas e respostas, primeira/segunda pessoa, nomes mencionados. Responda em ${language}. Retorne APENAS JSON válido sem markdown.`;
+  // Numera os trechos de forma compacta
+  const numbered = cleanSegments.map((s, i) => `[${i}] ${s.text}`).join('\n');
 
-  const userPrompt = `A transcrição abaixo tem trechos numerados [0], [1], etc. Identifique os falantes e retorne JSON no formato:
-{"speakers": ["Participante 1", "Participante 2"], "segments": [{"index": 0, "speaker": "Participante 1"}, {"index": 1, "speaker": "Participante 2"}]}
+  const systemPrompt = `Você é um especialista em análise de reuniões. Identifique os diferentes falantes usando pistas como perguntas/respostas, mudança de assunto, nomes mencionados, primeira/segunda pessoa. Responda em ${language}. Retorne SOMENTE JSON válido, sem markdown, sem texto extra.`;
 
-Se nomes próprios forem mencionados, use-os em vez de "Participante N". Se houver apenas um falante, atribua tudo a ele.
+  // Pede FAIXAS de índices por falante — resposta muito menor, evita estourar tokens
+  const userPrompt = `Os trechos abaixo estão numerados [0], [1], etc. Atribua cada trecho a um falante usando FAIXAS de índices.
 
-Transcrição:
-${fullText}`;
+Retorne JSON EXATAMENTE neste formato (use os nomes reais se mencionados, senão "Participante 1", "Participante 2"):
+{"ranges":[{"speaker":"Participante 1","from":0,"to":5},{"speaker":"Participante 2","from":6,"to":9}]}
+
+As faixas devem cobrir TODOS os índices de 0 a ${cleanSegments.length - 1} sem deixar buracos. Seja conciso.
+
+Trechos:
+${numbered}`;
 
   try {
     const raw = await callGemini(systemPrompt, userPrompt);
-    const clean = raw.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    // Parsing robusto: extrai o objeto JSON mesmo com texto ao redor
+    let jsonStr = raw.replace(/\`\`\`json|\`\`\`/g, '').trim();
+    const firstBrace = jsonStr.indexOf('{');
+    const lastBrace = jsonStr.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+      jsonStr = jsonStr.slice(firstBrace, lastBrace + 1);
+    }
 
-    if (!parsed.segments || !Array.isArray(parsed.segments)) return transcript;
+    const parsed = JSON.parse(jsonStr);
+    if (!parsed.ranges || !Array.isArray(parsed.ranges)) return transcript;
 
-    // Mapeia speakers de volta aos segmentos limpos
-    const speakerMap = new Map<number, string>();
-    parsed.segments.forEach((s: any) => {
-      if (typeof s.index === 'number' && s.speaker) speakerMap.set(s.index, s.speaker);
-    });
+    // Aplica as faixas aos segmentos
+    const result = cleanSegments.map(s => ({ ...s }));
+    for (const range of parsed.ranges) {
+      const from = Math.max(0, range.from ?? 0);
+      const to = Math.min(result.length - 1, range.to ?? result.length - 1);
+      const speaker = range.speaker || 'Participante';
+      for (let i = from; i <= to; i++) {
+        if (result[i]) result[i].speaker = speaker;
+      }
+    }
 
-    return cleanSegments.map((seg, i) => ({
-      ...seg,
-      speaker: speakerMap.get(i) || seg.speaker,
-    }));
+    return result;
   } catch (err) {
     console.warn('Falha na diarização:', err);
     return transcript;
