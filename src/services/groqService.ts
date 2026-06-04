@@ -6,8 +6,7 @@ import { TranscriptSegment } from '../types';
 const GROQ_API = 'https://api.groq.com/openai/v1';
 const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models';
 const GEMINI_MODEL = 'gemini-2.5-flash';
-const MAX_CHUNK_SIZE = 24 * 1024 * 1024;
-
+const MAX_CHUNK_SIZE = 20 * 1024 * 1024; // 20MB - margem de segurança para API Groq (limite 25MB)
 function resolveGeminiKey(): string {
   const key = import.meta.env.VITE_GEMINI_API_KEY;
   if (!key) throw new Error('Chave Gemini não configurada. Adicione VITE_GEMINI_API_KEY no .env.local');
@@ -33,8 +32,7 @@ async function callGemini(systemPrompt: string, userPrompt: string): Promise<str
   }
   const data = await res.json();
   return data.text || '';
-} // 24MB — cobre até ~1h40min a 32kbps
-
+} // 20MB — margem de segurança para evitar erro 413 da API Groq
 function resolveApiKey(userApiKey?: string | null): string {
   if (userApiKey?.trim()) return userApiKey.trim();
   const key = import.meta.env.VITE_GROQ_API_KEY;
@@ -133,8 +131,11 @@ async function splitAudioIntoChunks(blob: Blob): Promise<Blob[]> {
     chunks.push(blob.slice(offset, end, blob.type));
     offset = end;
   }
-  console.log(`Áudio dividido em ${chunks.length} chunks de ~${Math.round(MAX_CHUNK_SIZE / 1024 / 1024)}MB`);
-  return chunks;
+  console.log(`Áudio dividido em ${chunks.length} chunks de ~${Math.round(MAX_CHUNK_SIZE / 1024 / 1024)}MB cada`);
+console.log(`Tamanho total: ${(blob.size / (1024 * 1024)).toFixed(1)}MB`);
+chunks.forEach((chunk, i) => {
+  console.log(`  Chunk ${i + 1}: ${(chunk.size / (1024 * 1024)).toFixed(1)}MB`);
+});
 }
 
 // ─────────────────────────────────────────────
