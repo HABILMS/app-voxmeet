@@ -66,7 +66,8 @@ async function callGemini(systemPrompt: string, userPrompt: string): Promise<str
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      const errMsg = err?.error || `Erro Gemini: ${res.statusText}`;
+      const errMsg = typeof err?.error === 'string' ? err.error
+        : err?.error?.message || err?.message || `Erro Gemini: ${res.statusText}`;
       throw new Error(res.status === 429 || res.status === 503 ? `${errMsg} (429/503)` : errMsg);
     }
     const data = await res.json();
@@ -401,8 +402,15 @@ export async function identifySpeakers(
 
   const language = lang === 'pt-BR' ? 'português do Brasil' : 'English';
 
+  // Para reuniões muito grandes, limita o texto enviado (mantém qualidade da análise)
+  // O Gemini analisa o padrão e aplica as faixas a todos os segmentos
+  const MAX_SEGMENTS_FOR_ANALYSIS = 400;
+  const segmentsToAnalyze = cleanSegments.length > MAX_SEGMENTS_FOR_ANALYSIS
+    ? cleanSegments.slice(0, MAX_SEGMENTS_FOR_ANALYSIS)
+    : cleanSegments;
+
   // Numera os trechos de forma compacta
-  const numbered = cleanSegments.map((s, i) => `[${i}] ${s.text}`).join('\n');
+  const numbered = segmentsToAnalyze.map((s, i) => `[${i}] ${s.text}`).join('\n');
 
   const systemPrompt = `Você é um especialista em análise de reuniões. Identifique os diferentes falantes usando pistas como perguntas/respostas, mudança de assunto, nomes mencionados, primeira/segunda pessoa. Responda em ${language}. Retorne SOMENTE JSON válido, sem markdown, sem texto extra.`;
 
@@ -412,7 +420,7 @@ export async function identifySpeakers(
 Retorne JSON EXATAMENTE neste formato (use os nomes reais se mencionados, senão "Participante 1", "Participante 2"):
 {"ranges":[{"speaker":"Participante 1","from":0,"to":5},{"speaker":"Participante 2","from":6,"to":9}]}
 
-As faixas devem cobrir TODOS os índices de 0 a ${cleanSegments.length - 1} sem deixar buracos. Seja conciso.
+As faixas devem cobrir TODOS os índices de 0 a ${segmentsToAnalyze.length - 1} sem deixar buracos. Seja conciso.
 
 Trechos:
 ${numbered}`;

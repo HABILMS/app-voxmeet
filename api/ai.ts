@@ -26,17 +26,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: JSON.stringify({
         system_instruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
         contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
-        generationConfig: { temperature: 0.3, maxOutputTokens: 16384 },
+        generationConfig: {
+          temperature: 0.3,
+          maxOutputTokens: 8192,
+          thinkingConfig: { thinkingBudget: 0 }, // desabilita "thinking" (economiza tokens de saída)
+        },
       }),
     });
 
     if (!geminiRes.ok) {
       const err = await geminiRes.json().catch(() => ({}));
-      return res.status(geminiRes.status).json({ error: err?.error?.message || 'Erro Gemini' });
+      const msg = err?.error?.message || err?.error || `Gemini HTTP ${geminiRes.status}`;
+      console.error('Gemini error:', JSON.stringify(err).slice(0, 500));
+      return res.status(geminiRes.status).json({ error: msg });
     }
 
     const data = await geminiRes.json();
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const candidate = data.candidates?.[0];
+    const text = candidate?.content?.parts?.[0]?.text || '';
+
+    // Resposta vazia — provavelmente cortada por limite ou filtro
+    if (!text) {
+      const reason = candidate?.finishReason || 'desconhecido';
+      console.error('Gemini resposta vazia. finishReason:', reason, JSON.stringify(data).slice(0, 500));
+      return res.status(500).json({ error: `Gemini retornou resposta vazia (motivo: ${reason}). Tente uma reunião menor.` });
+    }
+
     return res.status(200).json({ text });
   } catch (err: any) {
     console.error('AI error:', err);
