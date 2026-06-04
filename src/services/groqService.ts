@@ -187,21 +187,39 @@ async function transcribeChunk(
   }
 
   const data = await res.json();
+console.log('📦 Resposta API chunk', chunkIndex, ':', JSON.stringify(data).substring(0, 200));
 
-  if (data.segments?.length > 0) {
-    return data.segments.map((seg: any, i: number) => ({
-      id: `seg_${chunkIndex}_${i}_${Math.random().toString(36).substr(2, 6)}`,
-      text: seg.text.trim(),
-      timestamp: baseTimestamp + Math.round(seg.start * 1000),
-    }));
-  }
+// Verifica se a resposta tem dados válidos
+if (!data) {
+  console.error('❌ Resposta vazia da API');
+  return [];
+}
 
+// Se tem segments, processa eles
+if (data.segments && Array.isArray(data.segments) && data.segments.length > 0) {
+  return data.segments.map((seg: any, i: number) => ({
+    id: `seg_${chunkIndex}_${i}_${Math.random().toString(36).substr(2, 6)}`,
+    text: (seg.text || '').trim(),
+    timestamp: baseTimestamp + Math.round((seg.start || 0) * 1000),
+  }));
+}
+
+// Se tem text direto (formato simples)
+if (data.text) {
   return [{
     id: `seg_${chunkIndex}_0_${Math.random().toString(36).substr(2, 6)}`,
-    text: data.text?.trim() || '',
+    text: data.text.trim(),
     timestamp: baseTimestamp,
   }];
 }
+
+// Se não tem nada, retorna array vazio
+console.warn('⚠️ Chunk sem texto reconhecido');
+return [{
+  id: `seg_${chunkIndex}_0_${Math.random().toString(36).substr(2, 6)}`,
+  text: '',
+  timestamp: baseTimestamp,
+}];
 
 export async function transcribeAudio(
   audioBlob: Blob,
@@ -222,10 +240,28 @@ export async function transcribeAudio(
     onProgress?.(i + 1, chunks.length);
     const chunkStartRatio = chunks.slice(0, i).reduce((acc, c) => acc + c.size, 0) / totalSize;
     const baseTimestamp = Date.now() + Math.round(chunkStartRatio * 600 * 1000);
-    const segments = await transcribeChunk(chunks[i], langCode, apiKey, i, baseTimestamp);
-    allSegments.push(...segments);
+    
+    try {
+      const segments = await transcribeChunk(chunks[i], langCode, apiKey, i, baseTimestamp);
+      
+      // ✅ Proteção contra retorno undefined/null
+      if (!segments || !Array.isArray(segments)) {
+        console.error(`❌ Chunk ${i} retornou dados inválidos:`, segments);
+        continue; // Pula este chunk em vez de quebrar tudo
+      }
+      
+      console.log(`✅ Chunk ${i + 1}: ${segments.length} segmentos`);
+      allSegments.push(...segments);
+      
+    } catch (chunkError) {
+      console.error(`❌ Erro no chunk ${i}:`, chunkError);
+      // Continua processando os próximos chunks
+    }
+    
     if (i < chunks.length - 1) await new Promise(r => setTimeout(r, 500));
   }
+
+  console.log(`📊 Total de segmentos: ${allSegments.length}`);
 
   // Retorna crua E otimizada
   return {
