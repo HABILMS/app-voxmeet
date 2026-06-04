@@ -13,7 +13,7 @@ import { MeetingDetail } from '../components/MeetingDetail';
 import { PremiumOverlay } from '../components/PremiumOverlay';
 import { FAQView } from '../components/FAQView';
 import { Meeting, TranscriptSegment, MeetingSource, UserProfile, SubscriptionPlan, PLAN_CONFIGS, calcExpiresAt } from '../types';
-import { summarizeMeeting } from '../services/groqService';
+import { summarizeMeeting, identifySpeakers } from '../services/groqService';
 import { cn } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
 
@@ -112,6 +112,22 @@ export default function Dashboard() {
       setView('list');
       setSelectedMeeting(null);
     } catch (error) { handleFirestoreError(error, OperationType.DELETE, path); }
+  };
+
+  const handleUpdateSpeakers = async (id: string, transcript: TranscriptSegment[], speakers: string[]) => {
+    if (!currentUser) return;
+    try {
+      const path = `users/${currentUser.uid}/meetings/${id}`;
+      const cleanTranscript = transcript.map(s => ({
+        id: s.id, text: s.text, timestamp: s.timestamp,
+        ...(s.speaker ? { speaker: s.speaker } : {}),
+      }));
+      await updateDoc(doc(db, path), { transcript: cleanTranscript, speakers });
+      // Atualiza o estado local
+      setSelectedMeeting(prev => prev ? { ...prev, transcript, speakers } : prev);
+    } catch (err) {
+      console.error('Erro ao salvar falantes:', err);
+    }
   };
 
   const handleRenameMeeting = async (id: string, newTitle: string) => {
@@ -226,7 +242,7 @@ export default function Dashboard() {
               )}
               {view === 'detail' && selectedMeeting && (
                 <motion.div key="detail" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} className="h-[calc(100vh-80px)] overflow-y-auto">
-                  <MeetingDetail meeting={selectedMeeting} onBack={() => setView('list')} onDelete={handleDeleteMeeting} onRename={handleRenameMeeting} onSummarize={handleSummarizeMeeting} isSummarizing={isSummarizing} userProfile={userProfile} />
+                  <MeetingDetail meeting={selectedMeeting} onBack={() => setView('list')} onDelete={handleDeleteMeeting} onRename={handleRenameMeeting} onSummarize={handleSummarizeMeeting} onUpdateSpeakers={handleUpdateSpeakers} isSummarizing={isSummarizing} userProfile={userProfile} />
                 </motion.div>
               )}
               {view === 'faq' && (

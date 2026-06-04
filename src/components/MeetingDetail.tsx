@@ -4,11 +4,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowLeft, Download, Sparkles, Trash2, Pencil,
   Loader2, MessageSquare, Brain, X, Send,
-  FileText, CheckCircle2, Copy, Check, Volume2, Square, Languages
+  FileText, CheckCircle2, Copy, Check, Volume2, Square, Languages, Users
 } from 'lucide-react';
 import { Meeting, UserProfile } from '../types';
 import ReactMarkdown from 'react-markdown';
-import { chatWithTranscript } from '../services/groqService';
+import { chatWithTranscript, identifySpeakers } from '../services/groqService';
 import { cn } from '../lib/utils';
 
 interface MeetingDetailProps {
@@ -17,13 +17,14 @@ interface MeetingDetailProps {
   onDelete: (id: string) => void;
   onRename: (id: string, newTitle: string) => void;
   onSummarize: (id: string) => void;
+  onUpdateSpeakers?: (id: string, transcript: any[], speakers: string[]) => void;
   isSummarizing: boolean;
   userProfile?: UserProfile | null;
 }
 
 export function MeetingDetail({
   meeting, onBack, onDelete, onRename, onSummarize,
-  isSummarizing, userProfile
+  onUpdateSpeakers, isSummarizing, userProfile
 }: MeetingDetailProps) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState(meeting.title || "");
@@ -33,6 +34,7 @@ export function MeetingDetail({
   const [isProcessingAI, setIsProcessingAI] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isIdentifying, setIsIdentifying] = useState(false);
   const [speakingTarget, setSpeakingTarget] = useState<'summary' | 'chat' | null>(null);
   const responseEndRef = useRef<HTMLDivElement>(null);
 
@@ -136,6 +138,20 @@ export function MeetingDetail({
     download(chatResponse, `voxmeet_ia_${Date.now()}.txt`, 'text/plain');
   };
 
+  const handleIdentifySpeakers = async () => {
+    if (meeting.transcript.length === 0 || isIdentifying) return;
+    setIsIdentifying(true);
+    try {
+      const updated = await identifySpeakers(meeting.transcript, lang);
+      const speakers = Array.from(new Set(updated.map(s => s.speaker).filter(Boolean))) as string[];
+      onUpdateSpeakers?.(meeting.id, updated, speakers);
+    } catch (err) {
+      console.error('Erro ao identificar falantes:', err);
+    } finally {
+      setIsIdentifying(false);
+    }
+  };
+
   const sourceLabel: Record<string, string> = {
     mic: 'Microfone', system: 'Meeting (sistema)', whatsapp: 'WhatsApp',
     meet: 'Google Meet', teams: 'Teams', zoom: 'Zoom', upload: 'Upload',
@@ -153,6 +169,22 @@ export function MeetingDetail({
           </button>
           <button onClick={() => setIsChatOpen(true)} className="btn-secondary text-blue-400 flex items-center gap-2">
             <MessageSquare className="w-4 h-4" /> Chat IA
+          </button>
+          <button
+            onClick={() => { setIsChatOpen(true); setChatPrompt('Traduza toda a transcrição para o português do Brasil de forma natural'); }}
+            className="btn-secondary text-green-400 flex items-center gap-2"
+            title="Traduzir reunião"
+          >
+            <Languages className="w-4 h-4" /> Traduzir
+          </button>
+          <button
+            onClick={handleIdentifySpeakers}
+            disabled={isIdentifying}
+            className="btn-secondary text-amber-400 flex items-center gap-2 disabled:opacity-40"
+            title="Identificar quem falou (IA)"
+          >
+            {isIdentifying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
+            {isIdentifying ? 'Analisando...' : 'Falantes'}
           </button>
           <button onClick={() => onSummarize(meeting.id)} disabled={isSummarizing || !!meeting.summary} className="btn-secondary disabled:opacity-40 flex items-center gap-2">
             {isSummarizing ? <Loader2 className="w-4 h-4 animate-spin text-purple-400" /> : <Sparkles className="w-4 h-4 text-purple-400" />}
