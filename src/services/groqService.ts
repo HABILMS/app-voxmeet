@@ -83,21 +83,88 @@ export function cleanTranscriptSegments(segments: TranscriptSegment[]): Transcri
 }
 
 // ─────────────────────────────────────────────
-// DIVISÃO EM CHUNKS
+// COMPRESSÃO + DIVISÃO POR TEMPO
+// Converte para WAV 16kHz mono (ideal p/ Whisper) e divide
+// por tempo — cada chunk é um WAV válido com cabeçalho próprio
 // ─────────────────────────────────────────────
-async function splitAudioIntoChunks(blob: Blob): Promise<Blob[]> {
-  if (blob.size <= MAX_CHUNK_SIZE) return [blob];
+const TARGET_SAMPLE_RATE = 16000; // 16kHz — padrão do Whisper
+const CHUNK_DURATION_SEC = 600;    // 10 min por chunk (~19MB em WAV 16kHz)
 
-  const chunks: Blob[] = [];
-  let offset = 0;
-  while (offset < blob.size) {
-    const end = Math.min(offset + MAX_CHUNK_SIZE, blob.size);
-    chunks.push(blob.slice(offset, end, blob.type));
-    offset = end;
+// Codifica amostras PCM mono em um Blob WAV válido
+function encodeWav(samples: Float32Array, sampleRate: number): Blob {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const writeString = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);       // PCM
+  view.setUint16(22, 1, true);       // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);      // 16 bits
+  writeString(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    offset += 2;
   }
+  return new Blob([view], { type: 'audio/wav' });
+}
 
-  console.log(`Áudio dividido em ${chunks.length} chunks de ~${Math.round(MAX_CHUNK_SIZE / 1024 / 1024)}MB`);
-  return chunks; // ✅ CORREÇÃO: estava faltando o return
+async function splitAudioIntoChunks(blob: Blob): Promise<Blob[]> {
+  // Tenta decodificar e recomprimir. Se falhar (formato não suportado),
+  // cai no fallback de enviar o arquivo original (até 24MB).
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+    const tempCtx = new AudioCtx();
+    const decoded = await tempCtx.decodeAudioData(arrayBuffer.slice(0));
+    await tempCtx.close();
+
+    // Reamostra para 16kHz mono usando OfflineAudioContext
+    const duration = decoded.duration;
+    const offlineCtx = new OfflineAudioContext(1, Math.ceil(duration * TARGET_SAMPLE_RATE), TARGET_SAMPLE_RATE);
+    const source = offlineCtx.createBufferSource();
+    source.buffer = decoded;
+    source.connect(offlineCtx.destination);
+    source.start();
+    const resampled = await offlineCtx.startRendering();
+
+    const channelData = resampled.getChannelData(0);
+    const samplesPerChunk = CHUNK_DURATION_SEC * TARGET_SAMPLE_RATE;
+    const chunks: Blob[] = [];
+
+    for (let start = 0; start < channelData.length; start += samplesPerChunk) {
+      const end = Math.min(start + samplesPerChunk, channelData.length);
+      const slice = channelData.slice(start, end);
+      chunks.push(encodeWav(slice, TARGET_SAMPLE_RATE));
+    }
+
+    const totalMB = chunks.reduce((a, c) => a + c.size, 0) / 1024 / 1024;
+    console.log(`Áudio convertido p/ WAV 16kHz: ${chunks.length} chunk(s), ${totalMB.toFixed(1)}MB total`);
+    return chunks;
+  } catch (err) {
+    console.warn('Falha ao recomprimir — usando arquivo original:', err);
+    // Fallback: arquivo original (Groq aceita até 25MB)
+    if (blob.size <= MAX_CHUNK_SIZE) return [blob];
+    // Último recurso: divide por bytes (pode corromper WebM, mas tenta)
+    const chunks: Blob[] = [];
+    let offset = 0;
+    while (offset < blob.size) {
+      const end = Math.min(offset + MAX_CHUNK_SIZE, blob.size);
+      chunks.push(blob.slice(offset, end, blob.type));
+      offset = end;
+    }
+    return chunks;
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -107,34 +174,27 @@ async function transcribeChunk(
   chunk: Blob, lang: string, apiKey: string,
   chunkIndex: number, baseTimestamp: number
 ): Promise<TranscriptSegment[]> {
-  const ext = chunk.type.includes('mp4') ? 'mp4'
+  const ext = chunk.type.includes('wav') ? 'wav'
+    : chunk.type.includes('mp4') ? 'mp4'
     : chunk.type.includes('ogg') ? 'ogg'
-    : chunk.type.includes('wav') ? 'wav'
     : chunk.type.includes('flac') ? 'flac'
     : chunk.type.includes('m4a') ? 'm4a'
     : 'webm';
 
-  const isLocalDev = isLocalhost && !isCapacitor;
-  let res: Response;
+  // Transcrição vai DIRETO ao Groq — o Vercel limita requisições a 4.5MB,
+  // inviável para áudio. Groq aceita até 25MB por arquivo.
+  const fd = new FormData();
+  fd.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
+  fd.append('model', 'whisper-large-v3-turbo');
+  fd.append('language', lang);
+  fd.append('response_format', 'verbose_json');
+  fd.append('timestamp_granularities[]', 'segment');
 
-  if (isLocalDev && apiKey) {
-    const fd = new FormData();
-    fd.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
-    fd.append('model', 'whisper-large-v3-turbo');
-    fd.append('language', lang);
-    fd.append('response_format', 'verbose_json');
-    fd.append('timestamp_granularities[]', 'segment');
-    res = await fetch(`${GROQ_API}/audio/transcriptions`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: fd,
-    });
-  } else {
-    const formData = new FormData();
-    formData.append('file', chunk, `chunk_${chunkIndex}.${ext}`);
-    formData.append('language', lang);
-    res = await fetch(`${API_BASE}/api/transcribe`, { method: 'POST', body: formData });
-  }
+  const res = await fetch(`${GROQ_API}/audio/transcriptions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: fd,
+  });
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -283,7 +343,6 @@ Use markdown rico para outros formatos. Seja detalhado e profissional.`;
   const prompt = `Transcrição:\n\n${fullText}\n\nSolicitação: ${userPrompt}`;
   return await callGemini(systemPrompt, prompt);
 }
-
 // ─────────────────────────────────────────────
 // VALIDAR CHAVE
 // ─────────────────────────────────────────────
