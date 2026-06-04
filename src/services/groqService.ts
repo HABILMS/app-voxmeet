@@ -220,7 +220,7 @@ return [{
   text: '',
   timestamp: baseTimestamp,
 }];
-
+}
 export async function transcribeAudio(
   audioBlob: Blob,
   lang: string = 'pt',
