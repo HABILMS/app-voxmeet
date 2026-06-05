@@ -12,6 +12,7 @@ import { MeetingList } from '../components/MeetingList';
 import { MeetingDetail } from '../components/MeetingDetail';
 import { PremiumOverlay } from '../components/PremiumOverlay';
 import { FAQView } from '../components/FAQView';
+import { DownloadAppButton } from '../components/DownloadAppButton';
 import { Meeting, TranscriptSegment, MeetingSource, UserProfile, SubscriptionPlan, PLAN_CONFIGS, calcExpiresAt } from '../types';
 import { summarizeMeeting, identifySpeakers } from '../services/groqService';
 import { cn } from '../lib/utils';
@@ -281,6 +282,9 @@ export default function Dashboard() {
                       <p className="text-[10px] text-white/20">Obtenha em console.groq.com/keys</p>
                     </div>
                   )}
+                  <div className="mb-4">
+                    <DownloadAppButton variant="menu" />
+                  </div>
                   <button onClick={handleLogout} className="w-full py-3 rounded-xl border border-red-500/20 text-red-400 hover:bg-red-400/10 transition-colors text-sm flex items-center justify-center gap-2">
                     <LogOut className="w-4 h-4" /> Sair da conta
                   </button>
