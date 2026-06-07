@@ -2,15 +2,16 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Mic, Square, Save, Languages, Sparkles,
-  Loader2, Brain, MessageSquare, X, Send,
-  AlertCircle, CheckCircle2, Upload, Pause, Play, Clock
+  Mic, Square, Languages,
+  Loader2, X,
+  AlertCircle, Upload, Pause, Play, Clock,
+  Trash2, PlusCircle, Check
 } from 'lucide-react';
 import { useTranscription } from '../hooks/useTranscription';
 import { SpeakerphoneAlert } from './SpeakerphoneAlert';
 import { cn } from '../lib/utils';
 import { TranscriptSegment, MeetingSource, UserProfile, PLAN_CONFIGS } from '../types';
-import { summarizeMeeting, chatWithTranscript, transcribeAudio } from '../services/groqService';
+import { transcribeAudio } from '../services/groqService';
 
 const LANGUAGES = [
   { code: 'pt-BR', name: 'Português' },
@@ -32,11 +33,19 @@ const PLAN_TIME_LIMITS: Record<string, number | null> = {
 };
 
 interface MeetingRecorderProps {
-  onSave: (segments: TranscriptSegment[], segmentsClean: TranscriptSegment[], source: MeetingSource, audioBlob?: Blob | null) => void;
+  onSave: (
+    segments: TranscriptSegment[],
+    segmentsClean: TranscriptSegment[],
+    source: MeetingSource,
+    audioBlob?: Blob | null,
+    appendToMeetingId?: string | null,
+    navigateToDetail?: boolean
+  ) => Promise<string | null>;
+  onFinish?: () => void;
   userProfile?: UserProfile | null;
 }
 
-export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
+export function MeetingRecorder({ onSave, onFinish, userProfile }: MeetingRecorderProps) {
   const [lang, setLang] = useState(() => localStorage.getItem('voxmeet_lang') || 'pt-BR');
   const userApiKey = userProfile?.apiKey ?? null;
 
@@ -48,11 +57,13 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
     captureMode, setCaptureMode, error, setError, isMobileDevice,
   } = useTranscription(lang, userApiKey);
 
-  const [isProcessingAI, setIsProcessingAI] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatPrompt, setChatPrompt] = useState('');
-  const [chatResponse, setChatResponse] = useState('');
   const [uploadLoading, setUploadLoading] = useState(false);
+  // Fluxo de gravação segmentada
+  const [currentMeetingId, setCurrentMeetingId] = useState<string | null>(null); // reunião em andamento
+  const [isSaving, setIsSaving] = useState(false);
+  const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [justSaved, setJustSaved] = useState(false); // trecho recém-salvo, aguardando ação
+  const uploadJustFinished = useRef(false);
   const [elapsed, setElapsed] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [showSpeakerAlert, setShowSpeakerAlert] = useState(false);
@@ -169,6 +180,7 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
       setError(null);
       setSegments(result.raw);
       setSegmentsClean(result.clean);
+      uploadJustFinished.current = true; // dispara auto-save no effect
     } catch (err: any) {
       setError(err.message || 'Erro ao transcrever arquivo.');
     } finally {
@@ -177,48 +189,72 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
     }
   };
 
-  const handleSummarize = async () => {
+  const source: MeetingSource = captureMode === 'system' ? 'system' : 'mic';
+
+  // Salva o trecho atual (cria reunião nova na 1ª vez, anexa nas seguintes)
+  const persistSegment = useCallback(async () => {
     if (segments.length === 0) return;
-    setIsProcessingAI(true);
+    setIsSaving(true);
     try {
-      const result = await summarizeMeeting(segments, lang, userApiKey);
-      if (result?.summary) {
-        setSegments(prev => [...prev, {
-          id: `summary_${Date.now()}`,
-          text: `━━ RESUMO ━━\n\n${result.summary}${result.actionItems.length > 0
-            ? '\n\n━━ ACTION ITEMS ━━\n' + result.actionItems.map((a, i) => `${i + 1}. ${a}`).join('\n')
-            : ''}`,
-          timestamp: Date.now(),
-        }]);
-      }
+      const id = await onSave(segments, segmentsClean, source, audioBlob, currentMeetingId, false);
+      if (id) setCurrentMeetingId(id);
+      setJustSaved(true);
     } catch (err: any) {
-      setError(err.message || 'Erro ao gerar resumo.');
+      setError(err.message || 'Erro ao salvar trecho.');
     } finally {
-      setIsProcessingAI(false);
+      setIsSaving(false);
     }
-  };
+  }, [segments, segmentsClean, source, audioBlob, currentMeetingId, onSave]);
 
-  const handleChatRequest = async () => {
-    if (!chatPrompt.trim() || segments.length === 0) return;
-    setIsProcessingAI(true);
-    setChatResponse('');
-    try {
-      const response = await chatWithTranscript(segments, chatPrompt, lang, userApiKey);
-      setChatResponse(response);
-    } catch (err: any) {
-      setError(err.message || 'Erro no chat com IA.');
-    } finally {
-      setIsProcessingAI(false);
+  // Auto-salva quando a transcrição de um trecho termina (parada manual ou automática)
+  const prevTranscribing = useRef(false);
+  useEffect(() => {
+    // transição de "transcrevendo" -> "parou de transcrever" com conteúdo novo
+    const transcribeFinished = prevTranscribing.current && !isTranscribing;
+    const uploadFinished = uploadJustFinished.current && !uploadLoading;
+    if ((transcribeFinished || uploadFinished) && segments.length > 0 && !justSaved && !isRecording) {
+      uploadJustFinished.current = false;
+      persistSegment();
     }
-  };
+    prevTranscribing.current = isTranscribing;
+  }, [isTranscribing, uploadLoading, segments.length, isRecording, justSaved, persistSegment]);
 
-  const handleSave = () => {
-    const source: MeetingSource = captureMode === 'system' ? 'system' : 'mic';
-    onSave(segments, segmentsClean, source, audioBlob);
-  };
+  // Continuar gravando: limpa o trecho atual da tela e inicia nova gravação,
+  // mantendo o currentMeetingId para anexar
+  const handleContinue = useCallback(() => {
+    setSegments([]);
+    setSegmentsClean([]);
+    setJustSaved(false);
+    setError(null);
+    startRecording();
+  }, [setSegments, setSegmentsClean, startRecording, setError]);
 
-  const isProcessing = isTranscribing || uploadLoading || isProcessingAI;
+  // Concluir reunião: finaliza e vai para o detalhe
+  const handleFinish = useCallback(() => {
+    const id = currentMeetingId;
+    // limpa estado local do gravador
+    setSegments([]);
+    setSegmentsClean([]);
+    setJustSaved(false);
+    setCurrentMeetingId(null);
+    if (id) onFinish?.();
+  }, [currentMeetingId, setSegments, setSegmentsClean, onFinish]);
+
+  // Descartar: remove o trecho atual. Se for o único trecho da reunião, descarta tudo.
+  const handleDiscard = useCallback(() => {
+    setShowDiscardConfirm(false);
+    // Descarta o trecho atual da tela. O backup no IndexedDB (se houver) será
+    // sobrescrito na próxima gravação. Trechos já salvos na reunião permanecem.
+    setSegments([]);
+    setSegmentsClean([]);
+    setJustSaved(false);
+    setError(null);
+  }, [setSegments, setSegmentsClean, setError]);
+
+  const isProcessing = isTranscribing || uploadLoading || isSaving;
   const hasContent = segments.length > 0;
+  // mostra as ações pós-parada quando: não está gravando, tem conteúdo e o trecho foi salvo
+  const showPostStopActions = !isRecording && !isProcessing && justSaved && hasContent;
 
   return (
     <div className="flex flex-col h-full max-w-4xl mx-auto py-6">
@@ -306,7 +342,7 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
           <Loader2 className="w-4 h-4 animate-spin shrink-0" />
           {transcribeProgress
             ? `Transcrevendo parte ${transcribeProgress.current} de ${transcribeProgress.total}...`
-            : isProcessingAI ? 'Processando com IA...' : 'Transcrevendo com Groq Whisper...'}
+            : isSaving ? 'Salvando trecho...' : 'Transcrevendo com Groq Whisper...'}
         </div>
       )}
 
@@ -352,12 +388,33 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
       <div className="p-4 md:p-6 glass-card bg-black/40 border-white/5 rounded-t-[40px] flex items-center justify-between gap-3">
 
         {/* Botão principal */}
-        {!isRecording ? (
+        {showPostStopActions ? (
+          /* Pós-parada: Continuar · Concluir · Descartar */
+          <div className="flex-1 flex gap-2">
+            <button onClick={handleContinue}
+              className="flex-1 py-4 rounded-3xl flex flex-col items-center justify-center gap-1 bg-white/10 text-white hover:bg-white/20 transition-all border border-white/10">
+              <PlusCircle className="w-5 h-5" />
+              <span className="text-xs font-bold">Continuar</span>
+            </button>
+            <button onClick={handleFinish}
+              className="flex-1 py-4 rounded-3xl flex flex-col items-center justify-center gap-1 bg-green-500 text-white hover:bg-green-600 transition-all shadow-xl shadow-green-500/20">
+              <Check className="w-5 h-5" />
+              <span className="text-xs font-bold">Concluir</span>
+            </button>
+            <button onClick={() => setShowDiscardConfirm(true)}
+              className="flex-none w-14 py-4 rounded-3xl flex flex-col items-center justify-center gap-1 bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-all border border-red-500/20"
+              title="Descartar este trecho">
+              <Trash2 className="w-5 h-5" />
+              <span className="text-[8px] uppercase font-bold">Descartar</span>
+            </button>
+          </div>
+        ) : !isRecording ? (
           <button onClick={startRecording} disabled={isProcessing || (minutesRemaining !== null && minutesRemaining <= 0)}
             className="flex-1 btn-primary py-4 md:py-5 rounded-3xl flex flex-col items-center justify-center gap-1 bg-white text-black hover:bg-white/90 disabled:opacity-50">
             <Mic className="w-5 h-5" />
             <span className="text-sm font-bold">
-              {minutesRemaining !== null && minutesRemaining <= 0 ? 'Limite atingido' : 'Iniciar Gravação'}
+              {minutesRemaining !== null && minutesRemaining <= 0 ? 'Limite atingido'
+                : currentMeetingId ? 'Iniciar Gravação' : 'Iniciar Gravação'}
             </span>
           </button>
         ) : (
@@ -396,92 +453,42 @@ export function MeetingRecorder({ onSave, userProfile }: MeetingRecorderProps) {
           </div>
         )}
 
-        {/* Ações secundárias */}
-        <div className="flex items-center gap-2 shrink-0">
-          {hasContent && !isRecording && (
-            <button onClick={handleSummarize} disabled={isProcessing}
-              className="w-14 h-14 glass rounded-2xl flex flex-col items-center justify-center text-purple-400 hover:bg-purple-400/10 transition-colors disabled:opacity-50 border border-white/5"
-              title="Resumo + Action Items">
-              {isProcessingAI ? <Loader2 className="w-5 h-5 animate-spin" /> : <Brain className="w-5 h-5" />}
-              <span className="text-[7px] uppercase font-bold mt-1">Resumo</span>
-            </button>
-          )}
-          {hasContent && !isRecording && (
-            <button onClick={() => setIsChatOpen(true)} disabled={isProcessing}
-              className="w-14 h-14 glass rounded-2xl flex flex-col items-center justify-center text-blue-400 hover:bg-blue-400/10 transition-colors border border-white/5">
-              <MessageSquare className="w-5 h-5" />
-              <span className="text-[7px] uppercase font-bold mt-1">Chat</span>
-            </button>
-          )}
-          {hasContent && !isRecording && (
-            <button onClick={handleSave} disabled={isProcessing}
-              className="w-16 h-14 glass rounded-2xl flex flex-col items-center justify-center text-green-400 hover:bg-green-400/10 transition-colors border-2 border-green-400/20">
-              <Save className="w-5 h-5" />
-              <span className="text-[7px] uppercase font-black mt-1">Salvar</span>
-            </button>
-          )}
-        </div>
+        {/* Indicador de salvamento automático */}
+        {isSaving && (
+          <div className="flex items-center gap-2 shrink-0 text-green-400 text-xs px-3">
+            <Loader2 className="w-4 h-4 animate-spin" /> Salvando...
+          </div>
+        )}
       </div>
 
-      {/* Modal Chat IA */}
+      {/* Modal de confirmação de descarte */}
       <AnimatePresence>
-        {isChatOpen && (
+        {showDiscardConfirm && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
-            onClick={() => !isProcessingAI && setIsChatOpen(false)}>
-            <motion.div initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 40, opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+            onClick={() => setShowDiscardConfirm(false)}>
+            <motion.div initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
               onClick={(e) => e.stopPropagation()}
-              className="w-full max-w-2xl bg-[#0a0a0a] border border-white/10 rounded-[28px] overflow-hidden flex flex-col max-h-[80vh]">
-              <div className="p-5 border-b border-white/5 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-9 h-9 rounded-full bg-blue-500/10 flex items-center justify-center">
-                    <Sparkles className="w-4 h-4 text-blue-400" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-white text-sm">Chat com a Transcrição</h3>
-                    <p className="text-[10px] text-white/30 uppercase tracking-widest">Groq LLaMA 70B</p>
-                  </div>
-                </div>
-                <button onClick={() => setIsChatOpen(false)} className="p-2 hover:bg-white/5 rounded-full text-white/40">
-                  <X className="w-5 h-5" />
+              className="w-full max-w-sm bg-[#0a0a0a] border border-white/10 rounded-[28px] p-6 flex flex-col items-center text-center gap-4">
+              <div className="w-14 h-14 rounded-full bg-red-500/10 flex items-center justify-center">
+                <Trash2 className="w-7 h-7 text-red-400" />
+              </div>
+              <div>
+                <h3 className="font-bold text-white text-lg">Descartar este trecho?</h3>
+                <p className="text-sm text-white/40 mt-1">
+                  {currentMeetingId
+                    ? 'O trecho atual será descartado. As partes já salvas na reunião continuam.'
+                    : 'Não dá para desfazer. Tudo que foi gravado neste trecho será perdido.'}
+                </p>
+              </div>
+              <div className="flex gap-3 w-full mt-2">
+                <button onClick={() => setShowDiscardConfirm(false)}
+                  className="flex-1 py-3 rounded-2xl bg-white/5 text-white hover:bg-white/10 transition-colors text-sm font-medium">
+                  Cancelar
                 </button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                {chatResponse ? (
-                  <div className="space-y-3">
-                    <div className="p-3 bg-white/5 rounded-xl text-sm text-white/60">{chatPrompt}</div>
-                    <div className="p-4 bg-blue-500/5 border border-blue-500/10 rounded-xl text-sm text-white/90 whitespace-pre-wrap leading-relaxed">
-                      {chatResponse}
-                    </div>
-                    <button onClick={() => { setChatResponse(''); setChatPrompt(''); }}
-                      className="text-xs text-white/30 hover:text-white/60 flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" /> Nova pergunta
-                    </button>
-                  </div>
-                ) : (
-                  <div className="py-6 flex flex-col items-center gap-4 text-white/20 text-center">
-                    <Brain className="w-10 h-10 opacity-10" />
-                    <p className="text-sm">Faça perguntas sobre a reunião</p>
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {['Resuma os 3 pontos principais', 'Extraia as tarefas e responsáveis', 'Faça uma ata formal', 'Liste os tópicos discutidos'].map((p) => (
-                        <button key={p} onClick={() => setChatPrompt(p)}
-                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-white/50 hover:text-white text-xs rounded-full border border-white/5 transition-colors">
-                          {p}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="p-4 border-t border-white/5 relative">
-                <textarea value={chatPrompt} onChange={(e) => setChatPrompt(e.target.value)}
-                  placeholder="Ex: Quais foram as decisões tomadas?"
-                  className="w-full bg-white/5 border border-white/10 rounded-2xl px-4 py-3 text-sm text-white placeholder:text-white/20 focus:border-blue-500/50 focus:outline-none resize-none h-20"
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleChatRequest(); } }}
-                />
-                <button onClick={handleChatRequest} disabled={isProcessingAI || !chatPrompt.trim()}
-                  className="absolute bottom-7 right-7 p-2 bg-blue-500 text-white rounded-xl hover:bg-blue-600 disabled:opacity-20 transition-all">
-                  {isProcessingAI ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                <button onClick={handleDiscard}
+                  className="flex-1 py-3 rounded-2xl bg-red-500 text-white hover:bg-red-600 transition-colors text-sm font-bold">
+                  Descartar
                 </button>
               </div>
             </motion.div>

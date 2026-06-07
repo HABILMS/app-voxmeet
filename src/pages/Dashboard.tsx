@@ -75,34 +75,73 @@ export default function Dashboard() {
 
   const handleLogout = () => { signOut(auth); navigate('/'); };
 
-  const handleSaveMeeting = async (segments: TranscriptSegment[], segmentsClean: TranscriptSegment[], source: MeetingSource, audioBlob?: Blob | null) => {
-    if (!currentUser) { setShowPremium(true); return; }
-    const meetingId = Math.random().toString(36).substr(2, 9);
-    const path = `users/${currentUser.uid}/meetings/${meetingId}`;
-    const durationSecs = segments.length > 0
+  // Salva uma nova reunião OU anexa um trecho a uma existente (modo continuação).
+  // Retorna o id da reunião (criada ou atualizada) para o gravador continuar nela.
+  const handleSaveMeeting = async (
+    segments: TranscriptSegment[],
+    segmentsClean: TranscriptSegment[],
+    source: MeetingSource,
+    audioBlob?: Blob | null,
+    appendToMeetingId?: string | null,
+    navigateToDetail: boolean = false
+  ): Promise<string | null> => {
+    if (!currentUser) { setShowPremium(true); return null; }
+
+    const clean = (arr: TranscriptSegment[]) =>
+      arr.map(s => ({ id: s.id, text: s.text, timestamp: s.timestamp, ...(s.speaker ? { speaker: s.speaker } : {}) }));
+    const trechoDuracao = segments.length > 0
       ? Math.round((segments[segments.length - 1].timestamp - segments[0].timestamp) / 1000)
       : 0;
+    const mins = Math.ceil(trechoDuracao / 60);
+
+    // ── MODO CONTINUAÇÃO: anexa à reunião existente ──
+    if (appendToMeetingId) {
+      const path = `users/${currentUser.uid}/meetings/${appendToMeetingId}`;
+      try {
+        const snap = await getDoc(doc(db, path));
+        if (snap.exists()) {
+          const data = snap.data() as any;
+          const mergedTranscript = [...(data.transcript || []), ...clean(segments)];
+          const mergedClean = [...(data.transcriptClean || []), ...clean(segmentsClean)];
+          const newDuration = (data.duration || 0) + trechoDuracao;
+          await updateDoc(doc(db, path), {
+            transcript: mergedTranscript,
+            transcriptClean: mergedClean,
+            duration: newDuration,
+            // resumo fica desatualizado após anexar — limpa para o usuário gerar de novo
+            summary: null,
+            actionItems: [],
+          });
+          const updated = { id: appendToMeetingId, ...data, transcript: mergedTranscript, transcriptClean: mergedClean, duration: newDuration, summary: null, actionItems: [] } as Meeting;
+          setSelectedMeeting(updated);
+          if (navigateToDetail) setView('detail');
+          if (mins > 0) await updateDoc(doc(db, 'users', currentUser.uid), { minutesUsed: (userProfile?.minutesUsed || 0) + mins });
+        }
+        return appendToMeetingId;
+      } catch (error) { handleFirestoreError(error, OperationType.UPDATE, path); return appendToMeetingId; }
+    }
+
+    // ── MODO NOVO: cria reunião ──
+    const meetingId = Math.random().toString(36).substr(2, 9);
+    const path = `users/${currentUser.uid}/meetings/${meetingId}`;
     const newMeeting: Record<string, any> = {
       title: `Reunião ${new Date().toLocaleDateString('pt-BR')}`,
       createdAt: Date.now(),
-      duration: durationSecs,
-      transcript: segments.map(s => ({ id: s.id, text: s.text, timestamp: s.timestamp, ...(s.speaker ? { speaker: s.speaker } : {}) })),
+      duration: trechoDuracao,
+      transcript: clean(segments),
       source: source ?? 'mic',
       status: 'done',
       userId: currentUser.uid,
-      transcriptClean: segmentsClean.map(s => ({
-        id: s.id, text: s.text, timestamp: s.timestamp,
-        ...(s.speaker ? { speaker: s.speaker } : {}),
-      })),
+      transcriptClean: clean(segmentsClean),
       expiresAt: calcExpiresAt(userProfile?.plan ?? 'starter', Date.now()) ?? null,
     };
     try {
       await setDoc(doc(db, path), newMeeting);
       setSelectedMeeting({ id: meetingId, ...newMeeting } as Meeting);
-      setView('detail');
-      const mins = Math.ceil(durationSecs / 60);
-      await updateDoc(doc(db, 'users', currentUser.uid), { minutesUsed: (userProfile?.minutesUsed || 0) + mins });
-    } catch (error) { handleFirestoreError(error, OperationType.CREATE, path); }
+      if (navigateToDetail) setView('detail');
+      if (mins > 0) await updateDoc(doc(db, 'users', currentUser.uid), { minutesUsed: (userProfile?.minutesUsed || 0) + mins });
+      return meetingId;
+    } catch (error) { handleFirestoreError(error, OperationType.CREATE, path); return null; }
   };
 
   const handleDeleteMeeting = async (id: string) => {
@@ -233,7 +272,7 @@ export default function Dashboard() {
             <AnimatePresence mode="wait">
               {view === 'recorder' && (
                 <motion.div key="recorder" initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.02 }} className="h-[calc(100vh-80px)]">
-                  <MeetingRecorder onSave={(segs, segsClean, src, blob) => handleSaveMeeting(segs, segsClean, src, blob)} userProfile={userProfile} />
+                  <MeetingRecorder onSave={handleSaveMeeting} onFinish={() => setView('detail')} userProfile={userProfile} />
                 </motion.div>
               )}
               {view === 'list' && (
